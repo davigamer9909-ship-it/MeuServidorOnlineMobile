@@ -149,7 +149,46 @@ wss.on("connection", (socket) => {
         const content = data.content || {};
 
         switch (data.cmd) {
+socket.on("message", (message, isBinary) => {
 
+    // VOICE CHAT
+    if (isBinary) {
+        const room = rooms.get(socket.roomId);
+
+        if (!room) return;
+
+        const voicePacket = Buffer.concat([
+            Buffer.from(uuid),
+            message
+        ]);
+
+        for (const clientUuid in room.players) {
+            const client = room.players[clientUuid];
+
+            if (
+                client !== socket &&
+                client.readyState === WebSocket.OPEN
+            ) {
+                client.send(voicePacket, { binary: true });
+            }
+        }
+
+        return;
+    }
+
+    // CHAT E COMANDOS JSON ORIGINAIS
+    let data;
+
+    try {
+        data = JSON.parse(message.toString());
+    } catch (err) {
+        console.error("Erro ao interpretar mensagem:", err);
+        return;
+    }
+
+    const content = data.content || {};
+
+    switch (data.cmd) {
             // ========================
             // CRIAR SALA
             // ========================
