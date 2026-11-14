@@ -45,27 +45,20 @@ const playerlist = {
     },
 
     add: function(uuid, roomCode) {
-
         const player = {
             uuid: uuid,
             room: roomCode,
-
-            // Coordenadas iniciais 3D
             x: 0,
             y: 2,
             z: 0,
-
-            // Rotação
             r_y: 0
         };
 
         this.players.push(player);
-
         return player;
     },
 
     update: function(uuid, content) {
-
         const player = this.get(uuid);
 
         if (!player) return;
@@ -101,13 +94,11 @@ const playerlist = {
 // ========================
 
 function sendToRoom(room, message) {
-
     if (!room) return;
 
     const packet = JSON.stringify(message);
 
     for (const clientUuid in room.players) {
-
         const client = room.players[clientUuid];
 
         if (client.readyState === WebSocket.OPEN) {
@@ -135,7 +126,47 @@ wss.on("connection", (socket) => {
         }
     }));
 
-    socket.on("message", (message) => {
+    // ========================
+    // RECEBER MENSAGENS
+    // ========================
+
+    socket.on("message", (message, isBinary) => {
+
+        // ========================
+        // VOICE CHAT BINÁRIO
+        // ========================
+
+        if (isBinary) {
+
+            const room = rooms.get(socket.roomId);
+
+            if (!room) return;
+
+            const voicePacket = Buffer.concat([
+                Buffer.from(uuid, "utf8"),
+                message
+            ]);
+
+            for (const clientUuid in room.players) {
+
+                const client = room.players[clientUuid];
+
+                if (
+                    client !== socket &&
+                    client.readyState === WebSocket.OPEN
+                ) {
+                    client.send(voicePacket, {
+                        binary: true
+                    });
+                }
+            }
+
+            return;
+        }
+
+        // ========================
+        // COMANDOS JSON
+        // ========================
 
         let data;
 
@@ -149,46 +180,7 @@ wss.on("connection", (socket) => {
         const content = data.content || {};
 
         switch (data.cmd) {
-socket.on("message", (message, isBinary) => {
 
-    // VOICE CHAT
-    if (isBinary) {
-        const room = rooms.get(socket.roomId);
-
-        if (!room) return;
-
-        const voicePacket = Buffer.concat([
-            Buffer.from(uuid),
-            message
-        ]);
-
-        for (const clientUuid in room.players) {
-            const client = room.players[clientUuid];
-
-            if (
-                client !== socket &&
-                client.readyState === WebSocket.OPEN
-            ) {
-                client.send(voicePacket, { binary: true });
-            }
-        }
-
-        return;
-    }
-
-    // CHAT E COMANDOS JSON ORIGINAIS
-    let data;
-
-    try {
-        data = JSON.parse(message.toString());
-    } catch (err) {
-        console.error("Erro ao interpretar mensagem:", err);
-        return;
-    }
-
-    const content = data.content || {};
-
-    switch (data.cmd) {
             // ========================
             // CRIAR SALA
             // ========================
@@ -235,77 +227,89 @@ socket.on("message", (message, isBinary) => {
             // ENTRAR NA SALA
             // ========================
 
-            
-case "join_room": {
+            case "join_room": {
 
-    const roomCode = String(content.code || "")
-        .trim()
-        .toUpperCase();
+                const roomCode = String(content.code || "")
+                    .trim()
+                    .toUpperCase();
 
-    const roomToJoin = rooms.get(roomCode);
+                const roomToJoin = rooms.get(roomCode);
 
-    if (!roomToJoin) {
-        socket.send(JSON.stringify({
-            cmd: "error",
-            content: { msg: "Sala não encontrada." }
-        }));
-        return;
-    }
+                if (!roomToJoin) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: {
+                            msg: "Sala não encontrada."
+                        }
+                    }));
 
-    if (roomToJoin.started) {
-        socket.send(JSON.stringify({
-            cmd: "error",
-            content: { msg: "A partida já começou." }
-        }));
-        return;
-    }
+                    return;
+                }
 
-    socket.roomId = roomCode;
-    roomToJoin.players[uuid] = socket;
+                if (roomToJoin.started) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: {
+                            msg: "A partida já começou."
+                        }
+                    }));
 
-    const newPlayer = playerlist.add(uuid, roomCode);
+                    return;
+                }
 
-    console.log(`Jogador entrou na sala ${roomCode}.`);
+                socket.roomId = roomCode;
 
-    socket.send(JSON.stringify({
-        cmd: "room_joined",
-        content: {
-            code: roomCode,
-            is_host: false
-        }
-    }));
+                roomToJoin.players[uuid] = socket;
 
-    socket.send(JSON.stringify({
-        cmd: "spawn_local_player",
-        content: { player: newPlayer }
-    }));
+                const newPlayer = playerlist.add(uuid, roomCode);
 
-    const roomPlayers = playerlist.getByRoom(roomCode)
-        .filter(p => p.uuid !== uuid);
+                console.log(`Jogador entrou na sala ${roomCode}.`);
 
-    socket.send(JSON.stringify({
-        cmd: "spawn_network_players",
-        content: { players: roomPlayers }
-    }));
+                socket.send(JSON.stringify({
+                    cmd: "room_joined",
+                    content: {
+                        code: roomCode,
+                        is_host: false
+                    }
+                }));
 
-    for (const clientUuid in roomToJoin.players) {
-        const client = roomToJoin.players[clientUuid];
+                socket.send(JSON.stringify({
+                    cmd: "spawn_local_player",
+                    content: {
+                        player: newPlayer
+                    }
+                }));
 
-        if (client !== socket && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-                cmd: "spawn_new_player",
-                content: { player: newPlayer }
-            }));
-        }
-    }
+                const roomPlayers = playerlist
+                    .getByRoom(roomCode)
+                    .filter(p => p.uuid !== uuid);
 
-    // IMPORTANTE:
-    // Não existe start_game aqui.
-    // O jogador permanece na sala de espera.
+                socket.send(JSON.stringify({
+                    cmd: "spawn_network_players",
+                    content: {
+                        players: roomPlayers
+                    }
+                }));
 
-    break;
-}
+                for (const clientUuid in roomToJoin.players) {
 
+                    const client = roomToJoin.players[clientUuid];
+
+                    if (
+                        client !== socket &&
+                        client.readyState === WebSocket.OPEN
+                    ) {
+                        client.send(JSON.stringify({
+                            cmd: "spawn_new_player",
+                            content: {
+                                player: newPlayer
+                            }
+                        }));
+                    }
+                }
+
+                break;
+            }
 
             // ========================
             // INICIAR PARTIDA
@@ -343,10 +347,8 @@ case "join_room": {
 
                 if (!room) return;
 
-                // Atualiza os dados do jogador
                 playerlist.update(uuid, content);
 
-                // Envia posição e rotação aos outros jogadores
                 for (const clientUuid in room.players) {
 
                     const client = room.players[clientUuid];
@@ -372,7 +374,7 @@ case "join_room": {
             }
 
             // ========================
-            // CHAT
+            // CHAT DE TEXTO
             // ========================
 
             case "chat": {
