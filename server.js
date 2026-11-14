@@ -1,9 +1,4 @@
 
-// ========================
-// Servidor Multiplayer Simples para Godot
-// Baseado no servidor original do Zee GameDev
-// ========================
-
 const express = require("express");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
@@ -24,8 +19,8 @@ const rooms = new Map();
 // ========================
 
 function generateRoomCode(length = 5) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let result = "";
 
     for (let i = 0; i < length; i++) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -50,48 +45,69 @@ const playerlist = {
     },
 
     add: function(uuid, roomCode) {
-        const playersInRoom = this.getByRoom(roomCode);
-        const isFirstPlayer = playersInRoom.length === 0;
 
-        let player = {
-            uuid,
+        const player = {
+            uuid: uuid,
             room: roomCode,
-            x: isFirstPlayer ? 550 : 700,
-            y: 300,
+
+            // Coordenadas iniciais 3D
+            x: 0,
+            y: 2,
+            z: 0,
+
+            // Rotação
+            r_y: 0
         };
 
         this.players.push(player);
+
         return player;
     },
 
-    update: function(uuid, newX, newY) {
+    update: function(uuid, content) {
+
         const player = this.get(uuid);
 
-        if (player) {
-            player.x = newX;
-            player.y = newY;
-        }
+        if (!player) return;
+
+        if (Number.isFinite(content.x))
+            player.x = content.x;
+
+        if (Number.isFinite(content.y))
+            player.y = content.y;
+
+        if (Number.isFinite(content.z))
+            player.z = content.z;
+
+        if (Number.isFinite(content.r_y))
+            player.r_y = content.r_y;
     },
 
     remove: function(uuid) {
-        this.players = this.players.filter(player => player.uuid !== uuid);
+        this.players = this.players.filter(
+            player => player.uuid !== uuid
+        );
     },
 
     getByRoom: function(roomCode) {
-        return this.players.filter(player => player.room === roomCode);
+        return this.players.filter(
+            player => player.room === roomCode
+        );
     }
 };
 
 // ========================
-// ENVIAR MENSAGEM
+// ENVIAR PARA A SALA
 // ========================
 
 function sendToRoom(room, message) {
+
     if (!room) return;
 
     const packet = JSON.stringify(message);
 
     for (const clientUuid in room.players) {
+
         const client = room.players[clientUuid];
 
         if (client.readyState === WebSocket.OPEN) {
@@ -101,24 +117,23 @@ function sendToRoom(room, message) {
 }
 
 // ========================
-// CONEXÃO DOS CLIENTES
+// CONEXÃO
 // ========================
 
 wss.on("connection", (socket) => {
 
     const uuid = uuidv4();
+
     socket.uuid = uuid;
 
     console.log(`Cliente conectado: ${uuid}`);
 
     socket.send(JSON.stringify({
         cmd: "joined_server",
-        content: { uuid: uuid }
+        content: {
+            uuid: uuid
+        }
     }));
-
-    // ========================
-    // RECEBER MENSAGENS
-    // ========================
 
     socket.on("message", (message) => {
 
@@ -127,7 +142,7 @@ wss.on("connection", (socket) => {
         try {
             data = JSON.parse(message.toString());
         } catch (err) {
-            console.error("Erro ao parsear mensagem:", err);
+            console.error("Erro ao interpretar mensagem:", err);
             return;
         }
 
@@ -152,11 +167,12 @@ wss.on("connection", (socket) => {
                 };
 
                 rooms.set(newRoomId, room);
+
                 room.players[uuid] = socket;
 
                 const newPlayer = playerlist.add(uuid, newRoomId);
 
-                console.log(`Sala ${newRoomId} criada pelo jogador ${uuid}`);
+                console.log(`Sala ${newRoomId} criada.`);
 
                 socket.send(JSON.stringify({
                     cmd: "room_created",
@@ -168,7 +184,9 @@ wss.on("connection", (socket) => {
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
-                    content: { player: newPlayer }
+                    content: {
+                        player: newPlayer
+                    }
                 }));
 
                 break;
@@ -178,75 +196,77 @@ wss.on("connection", (socket) => {
             // ENTRAR NA SALA
             // ========================
 
-            case "join_room": {
+            
+case "join_room": {
 
-                const roomCode = String(content.code || "").trim().toUpperCase();
-                const roomToJoin = rooms.get(roomCode);
+    const roomCode = String(content.code || "")
+        .trim()
+        .toUpperCase();
 
-                if (!roomToJoin) {
-                    socket.send(JSON.stringify({
-                        cmd: "error",
-                        content: { msg: "Sala não encontrada." }
-                    }));
+    const roomToJoin = rooms.get(roomCode);
 
-                    return;
-                }
+    if (!roomToJoin) {
+        socket.send(JSON.stringify({
+            cmd: "error",
+            content: { msg: "Sala não encontrada." }
+        }));
+        return;
+    }
 
-                if (roomToJoin.started) {
-                    socket.send(JSON.stringify({
-                        cmd: "error",
-                        content: { msg: "A partida já começou." }
-                    }));
+    if (roomToJoin.started) {
+        socket.send(JSON.stringify({
+            cmd: "error",
+            content: { msg: "A partida já começou." }
+        }));
+        return;
+    }
 
-                    return;
-                }
+    socket.roomId = roomCode;
+    roomToJoin.players[uuid] = socket;
 
-                socket.roomId = roomCode;
-                roomToJoin.players[uuid] = socket;
+    const newPlayer = playerlist.add(uuid, roomCode);
 
-                const newPlayer = playerlist.add(uuid, roomCode);
+    console.log(`Jogador entrou na sala ${roomCode}.`);
 
-                console.log(`Jogador ${uuid} entrou na sala ${roomCode}`);
+    socket.send(JSON.stringify({
+        cmd: "room_joined",
+        content: {
+            code: roomCode,
+            is_host: false
+        }
+    }));
 
-                socket.send(JSON.stringify({
-                    cmd: "room_joined",
-                    content: {
-                        code: roomCode,
-                        is_host: false
-                    }
-                }));
+    socket.send(JSON.stringify({
+        cmd: "spawn_local_player",
+        content: { player: newPlayer }
+    }));
 
-                socket.send(JSON.stringify({
-                    cmd: "spawn_local_player",
-                    content: { player: newPlayer }
-                }));
+    const roomPlayers = playerlist.getByRoom(roomCode)
+        .filter(p => p.uuid !== uuid);
 
-                const roomPlayers = playerlist.getByRoom(roomCode)
-                    .filter(p => p.uuid !== uuid);
+    socket.send(JSON.stringify({
+        cmd: "spawn_network_players",
+        content: { players: roomPlayers }
+    }));
 
-                socket.send(JSON.stringify({
-                    cmd: "spawn_network_players",
-                    content: { players: roomPlayers }
-                }));
+    for (const clientUuid in roomToJoin.players) {
+        const client = roomToJoin.players[clientUuid];
 
-                // Avisa os jogadores antigos
-                for (const clientUuid in roomToJoin.players) {
+        if (client !== socket && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+                cmd: "spawn_new_player",
+                content: { player: newPlayer }
+            }));
+        }
+    }
 
-                    const client = roomToJoin.players[clientUuid];
+    // IMPORTANTE:
+    // Não existe start_game aqui.
+    // O jogador permanece na sala de espera.
 
-                    if (
-                        client !== socket &&
-                        client.readyState === WebSocket.OPEN
-                    ) {
-                        client.send(JSON.stringify({
-                            cmd: "spawn_new_player",
-                            content: { player: newPlayer }
-                        }));
-                    }
-                }
+    break;
+}
 
-                break;
-            }
 
             // ========================
             // INICIAR PARTIDA
@@ -256,26 +276,16 @@ wss.on("connection", (socket) => {
 
                 const room = rooms.get(socket.roomId);
 
-                if (!room) {
-                    console.log("Sala não encontrada para iniciar.");
-                    return;
-                }
+                if (!room) return;
 
-                // Somente o host pode iniciar
-                if (uuid !== room.host) {
-                    console.log("Jogador sem permissão tentou iniciar.");
-                    return;
-                }
+                if (uuid !== room.host) return;
 
-                if (room.started) {
-                    return;
-                }
+                if (room.started) return;
 
                 room.started = true;
 
-                console.log(`Partida iniciada na sala ${socket.roomId}`);
+                console.log(`Partida iniciada: ${socket.roomId}`);
 
-                // Envia para TODOS os jogadores
                 sendToRoom(room, {
                     cmd: "start_game",
                     content: {}
@@ -285,38 +295,37 @@ wss.on("connection", (socket) => {
             }
 
             // ========================
-            // ATUALIZAR POSIÇÃO
+            // ATUALIZAR POSIÇÃO 3D
             // ========================
 
             case "position": {
 
-                playerlist.update(
-                    uuid,
-                    content.x,
-                    content.y
-                );
-
                 const room = rooms.get(socket.roomId);
 
-                if (room) {
+                if (!room) return;
 
-                    for (const clientUuid in room.players) {
+                // Atualiza os dados do jogador
+                playerlist.update(uuid, content);
 
-                        const client = room.players[clientUuid];
+                // Envia posição e rotação aos outros jogadores
+                for (const clientUuid in room.players) {
 
-                        if (
-                            client !== socket &&
-                            client.readyState === WebSocket.OPEN
-                        ) {
-                            client.send(JSON.stringify({
-                                cmd: "update_position",
-                                content: {
-                                    uuid: uuid,
-                                    x: content.x,
-                                    y: content.y
-                                }
-                            }));
-                        }
+                    const client = room.players[clientUuid];
+
+                    if (
+                        client !== socket &&
+                        client.readyState === WebSocket.OPEN
+                    ) {
+                        client.send(JSON.stringify({
+                            cmd: "update_position",
+                            content: {
+                                uuid: uuid,
+                                x: content.x,
+                                y: content.y,
+                                z: content.z,
+                                r_y: content.r_y
+                            }
+                        }));
                     }
                 }
 
@@ -331,15 +340,15 @@ wss.on("connection", (socket) => {
 
                 const room = rooms.get(socket.roomId);
 
-                if (room) {
-                    sendToRoom(room, {
-                        cmd: "new_chat_message",
-                        content: {
-                            uuid: uuid,
-                            msg: content.msg
-                        }
-                    });
-                }
+                if (!room) return;
+
+                sendToRoom(room, {
+                    cmd: "new_chat_message",
+                    content: {
+                        uuid: uuid,
+                        msg: content.msg
+                    }
+                });
 
                 break;
             }
@@ -347,7 +356,7 @@ wss.on("connection", (socket) => {
     });
 
     // ========================
-    // DESCONECTAR JOGADOR
+    // DESCONECTAR
     // ========================
 
     socket.on("close", () => {
@@ -367,9 +376,12 @@ wss.on("connection", (socket) => {
                 const client = room.players[clientUuid];
 
                 if (client.readyState === WebSocket.OPEN) {
+
                     client.send(JSON.stringify({
                         cmd: "player_disconnected",
-                        content: { uuid: uuid }
+                        content: {
+                            uuid: uuid
+                        }
                     }));
                 }
             }
