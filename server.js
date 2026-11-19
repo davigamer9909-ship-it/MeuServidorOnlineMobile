@@ -36,17 +36,13 @@ function generateRoomCode(length = 5) {
 const playerlist = {
     players: [],
 
-    getAll: function() {
-        return this.players;
-    },
-
-    get: function(uuid) {
+    get(uuid) {
         return this.players.find(player => player.uuid === uuid);
     },
 
-    add: function(uuid, roomCode) {
+    add(uuid, roomCode) {
         const player = {
-            uuid: uuid,
+            uuid,
             room: roomCode,
             x: 0,
             y: 2,
@@ -58,7 +54,7 @@ const playerlist = {
         return player;
     },
 
-    update: function(uuid, content) {
+    update(uuid, content) {
         const player = this.get(uuid);
 
         if (!player) return;
@@ -76,13 +72,13 @@ const playerlist = {
             player.r_y = content.r_y;
     },
 
-    remove: function(uuid) {
+    remove(uuid) {
         this.players = this.players.filter(
             player => player.uuid !== uuid
         );
     },
 
-    getByRoom: function(roomCode) {
+    getByRoom(roomCode) {
         return this.players.filter(
             player => player.room === roomCode
         );
@@ -130,43 +126,7 @@ wss.on("connection", (socket) => {
     // RECEBER MENSAGENS
     // ========================
 
-    socket.on("message", (message, isBinary) => {
-
-        // ========================
-        // VOICE CHAT BINÁRIO
-        // ========================
-
-        if (isBinary) {
-
-            const room = rooms.get(socket.roomId);
-
-            if (!room) return;
-
-            const voicePacket = Buffer.concat([
-                Buffer.from(uuid, "utf8"),
-                message
-            ]);
-
-            for (const clientUuid in room.players) {
-
-                const client = room.players[clientUuid];
-
-                if (
-                    client !== socket &&
-                    client.readyState === WebSocket.OPEN
-                ) {
-                    client.send(voicePacket, {
-                        binary: true
-                    });
-                }
-            }
-
-            return;
-        }
-
-        // ========================
-        // COMANDOS JSON
-        // ========================
+    socket.on("message", (message) => {
 
         let data;
 
@@ -319,9 +279,15 @@ wss.on("connection", (socket) => {
 
                 const room = rooms.get(socket.roomId);
 
-                if (!room) return;
+                if (!room) {
+                    console.log("Sala não encontrada para iniciar.");
+                    return;
+                }
 
-                if (uuid !== room.host) return;
+                if (uuid !== room.host) {
+                    console.log("Apenas o criador pode iniciar.");
+                    return;
+                }
 
                 if (room.started) return;
 
@@ -331,7 +297,9 @@ wss.on("connection", (socket) => {
 
                 sendToRoom(room, {
                     cmd: "start_game",
-                    content: {}
+                    content: {
+                        scene: "test_world"
+                    }
                 });
 
                 break;
