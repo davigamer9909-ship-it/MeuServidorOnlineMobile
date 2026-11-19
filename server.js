@@ -41,16 +41,36 @@ const playerlist = {
     },
 
     add(uuid, roomCode) {
+        // Conta quantos jogadores já existem na sala
+        const jogadoresNaSala = this.getByRoom(roomCode);
+
+        // Posições iniciais próximas umas das outras
+        const spawnPositions = [
+            { x: 0, y: 0 },
+            { x: 100, y: 0 },
+            { x: 0, y: 100 },
+            { x: 100, y: 100 }
+        ];
+
+        const spawn = spawnPositions[
+            jogadoresNaSala.length % spawnPositions.length
+        ];
+
         const player = {
-            uuid,
+            uuid: uuid,
             room: roomCode,
-            x: 0,
-            y: 2,
+            x: spawn.x,
+            y: spawn.y,
             z: 0,
             r_y: 0
         };
 
         this.players.push(player);
+
+        console.log(
+            `Jogador ${uuid} criado na posição (${spawn.x}, ${spawn.y})`
+        );
+
         return player;
     },
 
@@ -147,7 +167,13 @@ wss.on("connection", (socket) => {
 
             case "create_room": {
 
-                const newRoomId = generateRoomCode();
+                if (socket.roomId) return;
+
+                let newRoomId;
+
+                do {
+                    newRoomId = generateRoomCode();
+                } while (rooms.has(newRoomId));
 
                 socket.roomId = newRoomId;
 
@@ -189,6 +215,8 @@ wss.on("connection", (socket) => {
 
             case "join_room": {
 
+                if (socket.roomId) return;
+
                 const roomCode = String(content.code || "")
                     .trim()
                     .toUpperCase();
@@ -225,6 +253,7 @@ wss.on("connection", (socket) => {
 
                 console.log(`Jogador entrou na sala ${roomCode}.`);
 
+                // Confirma entrada
                 socket.send(JSON.stringify({
                     cmd: "room_joined",
                     content: {
@@ -233,6 +262,7 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
+                // Cria o próprio jogador
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
                     content: {
@@ -240,9 +270,10 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
+                // Envia os jogadores que já estavam na sala
                 const roomPlayers = playerlist
                     .getByRoom(roomCode)
-                    .filter(p => p.uuid !== uuid);
+                    .filter(player => player.uuid !== uuid);
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_network_players",
@@ -251,6 +282,7 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
+                // Avisa os jogadores antigos sobre o novo jogador
                 for (const clientUuid in roomToJoin.players) {
 
                     const client = roomToJoin.players[clientUuid];
@@ -277,23 +309,42 @@ wss.on("connection", (socket) => {
 
             case "start_game": {
 
+                console.log("Recebido start_game de:", uuid);
+
                 const room = rooms.get(socket.roomId);
 
                 if (!room) {
-                    console.log("Sala não encontrada para iniciar.");
+                    console.log("Sala não encontrada!");
                     return;
                 }
 
                 if (uuid !== room.host) {
-                    console.log("Apenas o criador pode iniciar.");
+                    console.log("Apenas o host pode iniciar!");
                     return;
                 }
 
-                if (room.started) return;
+                if (room.started) {
+                    console.log("Partida já iniciada!");
+                    return;
+                }
+
+                const totalPlayers = Object.keys(room.players).length;
+
+                if (totalPlayers < 2) {
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: {
+                            msg: "É necessário pelo menos 2 jogadores."
+                        }
+                    }));
+
+                    return;
+                }
 
                 room.started = true;
 
                 console.log(`Partida iniciada: ${socket.roomId}`);
+                console.log(`Total de jogadores: ${totalPlayers}`);
 
                 sendToRoom(room, {
                     cmd: "start_game",
@@ -302,11 +353,13 @@ wss.on("connection", (socket) => {
                     }
                 });
 
+                console.log("Comando enviado para todos os jogadores!");
+
                 break;
             }
 
             // ========================
-            // ATUALIZAR POSIÇÃO 3D
+            // ATUALIZAR POSIÇÃO
             // ========================
 
             case "position": {
@@ -317,6 +370,11 @@ wss.on("connection", (socket) => {
 
                 playerlist.update(uuid, content);
 
+                const player = playerlist.get(uuid);
+
+                if (!player) return;
+
+                // Envia a posição para os outros jogadores
                 for (const clientUuid in room.players) {
 
                     const client = room.players[clientUuid];
@@ -329,10 +387,10 @@ wss.on("connection", (socket) => {
                             cmd: "update_position",
                             content: {
                                 uuid: uuid,
-                                x: content.x,
-                                y: content.y,
-                                z: content.z,
-                                r_y: content.r_y
+                                x: player.x,
+                                y: player.y,
+                                z: player.z,
+                                r_y: player.r_y
                             }
                         }));
                     }
@@ -342,7 +400,7 @@ wss.on("connection", (socket) => {
             }
 
             // ========================
-            // CHAT DE TEXTO
+            // CHAT
             // ========================
 
             case "chat": {
@@ -380,6 +438,7 @@ wss.on("connection", (socket) => {
 
             delete room.players[uuid];
 
+            // Avisa os outros jogadores
             for (const clientUuid in room.players) {
 
                 const client = room.players[clientUuid];
@@ -395,11 +454,12 @@ wss.on("connection", (socket) => {
                 }
             }
 
+            // Remove sala vazia
             if (Object.keys(room.players).length === 0) {
 
                 rooms.delete(socket.roomId);
 
-                console.log(`Sala ${socket.roomId} vazia e removida.`);
+                console.log(`Sala ${socket.roomId} removida.`);
             }
         }
     });
