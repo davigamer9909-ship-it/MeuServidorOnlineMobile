@@ -41,10 +41,8 @@ const playerlist = {
     },
 
     add(uuid, roomCode) {
-        // Conta quantos jogadores já existem na sala
         const jogadoresNaSala = this.getByRoom(roomCode);
 
-        // Posições iniciais próximas umas das outras
         const spawnPositions = [
             { x: 0, y: 0 },
             { x: 100, y: 0 },
@@ -57,7 +55,7 @@ const playerlist = {
         ];
 
         const player = {
-            uuid: uuid,
+            uuid,
             room: roomCode,
             x: spawn.x,
             y: spawn.y,
@@ -67,9 +65,7 @@ const playerlist = {
 
         this.players.push(player);
 
-        console.log(
-            `Jogador ${uuid} criado na posição (${spawn.x}, ${spawn.y})`
-        );
+        console.log(`Jogador ${uuid} criado.`);
 
         return player;
     },
@@ -124,6 +120,52 @@ function sendToRoom(room, message) {
 }
 
 // ========================
+// VERIFICAR VITÓRIA
+// ========================
+
+function verificarVitoria(room) {
+    const vivos = Object.keys(room.players).filter(
+        id => room.alive[id]
+    );
+
+    const impostores = vivos.filter(
+        id => room.roles[id] === "impostor"
+    );
+
+    const crewmates = vivos.filter(
+        id => room.roles[id] === "crewmate"
+    );
+
+    if (impostores.length === 0) {
+        room.finished = true;
+
+        sendToRoom(room, {
+            cmd: "game_over",
+            content: {
+                winner: "crewmates"
+            }
+        });
+
+        console.log("Crewmates venceram!");
+
+        return;
+    }
+
+    if (crewmates.length === 0 || impostores.length >= crewmates.length) {
+        room.finished = true;
+
+        sendToRoom(room, {
+            cmd: "game_over",
+            content: {
+                winner: "impostor"
+            }
+        });
+
+        console.log("Impostor venceu!");
+    }
+}
+
+// ========================
 // CONEXÃO
 // ========================
 
@@ -138,7 +180,7 @@ wss.on("connection", (socket) => {
     socket.send(JSON.stringify({
         cmd: "joined_server",
         content: {
-            uuid: uuid
+            uuid
         }
     }));
 
@@ -180,7 +222,10 @@ wss.on("connection", (socket) => {
                 const room = {
                     players: {},
                     host: uuid,
-                    started: false
+                    started: false,
+                    finished: false,
+                    roles: {},
+                    alive: {}
                 };
 
                 rooms.set(newRoomId, room);
@@ -253,7 +298,6 @@ wss.on("connection", (socket) => {
 
                 console.log(`Jogador entrou na sala ${roomCode}.`);
 
-                // Confirma entrada
                 socket.send(JSON.stringify({
                     cmd: "room_joined",
                     content: {
@@ -262,7 +306,6 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
-                // Cria o próprio jogador
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
                     content: {
@@ -270,7 +313,6 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
-                // Envia os jogadores que já estavam na sala
                 const roomPlayers = playerlist
                     .getByRoom(roomCode)
                     .filter(player => player.uuid !== uuid);
@@ -282,7 +324,6 @@ wss.on("connection", (socket) => {
                     }
                 }));
 
-                // Avisa os jogadores antigos sobre o novo jogador
                 for (const clientUuid in roomToJoin.players) {
 
                     const client = roomToJoin.players[clientUuid];
@@ -309,28 +350,15 @@ wss.on("connection", (socket) => {
 
             case "start_game": {
 
-                console.log("Recebido start_game de:", uuid);
-
                 const room = rooms.get(socket.roomId);
 
-                if (!room) {
-                    console.log("Sala não encontrada!");
-                    return;
-                }
+                if (!room) return;
+                if (uuid !== room.host) return;
+                if (room.started) return;
 
-                if (uuid !== room.host) {
-                    console.log("Apenas o host pode iniciar!");
-                    return;
-                }
+                const jogadores = Object.keys(room.players);
 
-                if (room.started) {
-                    console.log("Partida já iniciada!");
-                    return;
-                }
-
-                const totalPlayers = Object.keys(room.players).length;
-
-                if (totalPlayers < 2) {
+                if (jogadores.length < 2) {
                     socket.send(JSON.stringify({
                         cmd: "error",
                         content: {
@@ -341,19 +369,41 @@ wss.on("connection", (socket) => {
                     return;
                 }
 
+                // Escolher impostor
+                const indice = Math.floor(
+                    Math.random() * jogadores.length
+                );
+
+                const impostor = jogadores[indice];
+
                 room.started = true;
 
-                console.log(`Partida iniciada: ${socket.roomId}`);
-                console.log(`Total de jogadores: ${totalPlayers}`);
+                for (const id of jogadores) {
+                    room.roles[id] =
+                        id === impostor ? "impostor" : "crewmate";
 
-                sendToRoom(room, {
-                    cmd: "start_game",
-                    content: {
-                        scene: "test_world"
+                    room.alive[id] = true;
+                }
+
+                console.log("Partida iniciada:", socket.roomId);
+                console.log("Impostor:", impostor);
+
+                // Enviar função individualmente
+                for (const id of jogadores) {
+
+                    const client = room.players[id];
+
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({
+                            cmd: "start_game",
+                            content: {
+                                scene: "test_world",
+                                role: room.roles[id],
+                                alive: true
+                            }
+                        }));
                     }
-                });
-
-                console.log("Comando enviado para todos os jogadores!");
+                }
 
                 break;
             }
@@ -366,7 +416,8 @@ wss.on("connection", (socket) => {
 
                 const room = rooms.get(socket.roomId);
 
-                if (!room) return;
+                if (!room || !room.started || room.finished) return;
+                if (!room.alive[uuid]) return;
 
                 playerlist.update(uuid, content);
 
@@ -374,7 +425,6 @@ wss.on("connection", (socket) => {
 
                 if (!player) return;
 
-                // Envia a posição para os outros jogadores
                 for (const clientUuid in room.players) {
 
                     const client = room.players[clientUuid];
@@ -386,7 +436,7 @@ wss.on("connection", (socket) => {
                         client.send(JSON.stringify({
                             cmd: "update_position",
                             content: {
-                                uuid: uuid,
+                                uuid,
                                 x: player.x,
                                 y: player.y,
                                 z: player.z,
@@ -395,6 +445,42 @@ wss.on("connection", (socket) => {
                         }));
                     }
                 }
+
+                break;
+            }
+
+            // ========================
+            // ELIMINAR JOGADOR
+            // ========================
+
+            case "kill": {
+
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+
+                const targetUuid = String(content.uuid || "");
+
+                if (room.roles[uuid] !== "impostor") return;
+                if (!room.alive[uuid]) return;
+                if (targetUuid === uuid) return;
+
+                if (!room.players[targetUuid]) return;
+                if (room.roles[targetUuid] !== "crewmate") return;
+                if (!room.alive[targetUuid]) return;
+
+                room.alive[targetUuid] = false;
+
+                console.log(`${uuid} eliminou ${targetUuid}`);
+
+                sendToRoom(room, {
+                    cmd: "player_killed",
+                    content: {
+                        uuid: targetUuid
+                    }
+                });
+
+                verificarVitoria(room);
 
                 break;
             }
@@ -412,7 +498,7 @@ wss.on("connection", (socket) => {
                 sendToRoom(room, {
                     cmd: "new_chat_message",
                     content: {
-                        uuid: uuid,
+                        uuid,
                         msg: content.msg
                     }
                 });
@@ -438,7 +524,11 @@ wss.on("connection", (socket) => {
 
             delete room.players[uuid];
 
-            // Avisa os outros jogadores
+            if (room.started && !room.finished) {
+                delete room.alive[uuid];
+                delete room.roles[uuid];
+            }
+
             for (const clientUuid in room.players) {
 
                 const client = room.players[clientUuid];
@@ -448,18 +538,21 @@ wss.on("connection", (socket) => {
                     client.send(JSON.stringify({
                         cmd: "player_disconnected",
                         content: {
-                            uuid: uuid
+                            uuid
                         }
                     }));
                 }
             }
 
-            // Remove sala vazia
             if (Object.keys(room.players).length === 0) {
 
                 rooms.delete(socket.roomId);
 
                 console.log(`Sala ${socket.roomId} removida.`);
+
+            } else if (room.started && !room.finished) {
+
+                verificarVitoria(room);
             }
         }
     });
