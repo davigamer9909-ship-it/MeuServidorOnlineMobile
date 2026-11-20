@@ -188,6 +188,71 @@ wss.on("connection", socket => {
                 : {};
 
         switch (data.cmd) {
+            
+            // =====================================
+            // SAIR DA SALA E VOLTAR AO LOBBY
+            // =====================================
+
+            case "leave_room": {
+                const code = socket.roomId;
+
+                if (!code) return;
+
+                const room = rooms.get(code);
+
+                if (room) {
+                    delete room.players[uuid];
+                    delete room.alive[uuid];
+                    delete room.roles[uuid];
+                    delete room.ventStates[uuid];
+
+                    playerlist.remove(uuid);
+
+                    // Avisar os outros jogadores.
+                    sendToRoom(room, {
+                        cmd: "player_disconnected",
+                        content: { uuid }
+                    });
+
+                    // Se o host saiu, escolher outro jogador.
+                    if (room.host === uuid) {
+                        const remaining = Object.keys(room.players);
+
+                        if (remaining.length > 0) {
+                            room.host = remaining[0];
+
+                            const newHost = room.players[room.host];
+
+                            if (newHost.readyState === WebSocket.OPEN) {
+                                newHost.send(JSON.stringify({
+                                    cmd: "host_changed",
+                                    content: {
+                                        uuid: room.host
+                                    }
+                                }));
+                            }
+                        }
+                    }
+
+                    // Excluir sala vazia.
+                    if (Object.keys(room.players).length === 0) {
+                        rooms.delete(code);
+                        console.log("Sala removida:", code);
+                    }
+                }
+
+                // Liberar a conexão para criar ou entrar em outra sala.
+                socket.roomId = null;
+
+                socket.send(JSON.stringify({
+                    cmd: "left_room",
+                    content: {}
+                }));
+
+                console.log("Jogador saiu da sala:", uuid, code);
+
+                break;
+            }
 
             // =====================================
             // CRIAR SALA
