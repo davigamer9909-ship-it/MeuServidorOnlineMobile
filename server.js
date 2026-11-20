@@ -13,6 +13,9 @@ const server = app.listen(PORT, () => {
 const wss = new WebSocket.Server({ server });
 const rooms = new Map();
 
+const REPORT_DISTANCE = 70;
+const KILL_DISTANCE = 70;
+
 // =====================================
 // CÓDIGO DA SALA
 // =====================================
@@ -102,6 +105,41 @@ function sendToRoom(room, message) {
 }
 
 // =====================================
+// ENVIAR PARA TODOS MENOS UM
+// =====================================
+
+function sendToRoomExcept(room, excludedSocket, message) {
+    if (!room) return;
+
+    const packet = JSON.stringify(message);
+
+    for (const id in room.players) {
+        const client = room.players[id];
+
+        if (
+            client !== excludedSocket &&
+            client.readyState === WebSocket.OPEN
+        ) {
+            client.send(packet);
+        }
+    }
+}
+
+// =====================================
+// ESTADO INICIAL DA REUNIÃO
+// =====================================
+
+function resetMeeting(room) {
+    room.meeting = {
+        active: false,
+        reporter: null,
+        reason: null,
+        votes: {},
+        startedAt: null
+    };
+}
+
+// =====================================
 // FINALIZAR PARTIDA
 // =====================================
 
@@ -109,6 +147,7 @@ function finalizarPartida(room, winner) {
     if (!room || room.finished) return;
 
     room.finished = true;
+    room.meeting.active = false;
 
     console.log("================================");
     console.log("PARTIDA FINALIZADA!");
@@ -118,7 +157,7 @@ function finalizarPartida(room, winner) {
     sendToRoom(room, {
         cmd: "game_over",
         content: {
-            winner: winner
+            winner
         }
     });
 }
@@ -156,6 +195,131 @@ function verificarVitoria(room) {
 }
 
 // =====================================
+// INICIAR REUNIÃO
+// =====================================
+
+function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
+    if (!room || !room.started || room.finished) return false;
+    if (room.meeting.active) return false;
+    if (room.alive[reporter] !== true) return false;
+
+    room.meeting = {
+        active: true,
+        reporter,
+        reason,
+        votes: {},
+        startedAt: Date.now()
+    };
+
+    console.log("================================");
+    console.log("REUNIÃO INICIADA");
+    console.log("Motivo:", reason);
+    console.log("Responsável:", reporter);
+    console.log("================================");
+
+    sendToRoom(room, {
+        cmd: "meeting_started",
+        content: {
+            reason,
+            reporter,
+            body_uuid: bodyUUID,
+            duration: 60
+        }
+    });
+
+    return true;
+}
+
+// =====================================
+// FINALIZAR REUNIÃO
+// =====================================
+
+function finalizarReuniao(room) {
+    if (!room || !room.meeting.active) return;
+
+    const counts = {};
+
+    for (const vote of Object.values(room.meeting.votes)) {
+        counts[vote] = (counts[vote] || 0) + 1;
+    }
+
+    const values = Object.values(counts);
+    const highest = values.length > 0 ? Math.max(...values) : 0;
+
+    const winners = Object.keys(counts).filter(
+        id => counts[id] === highest
+    );
+
+    let ejected = null;
+    let tie = false;
+
+    if (winners.length === 1 && winners[0] !== "skip") {
+        ejected = winners[0];
+
+        if (room.alive[ejected] === true) {
+            room.alive[ejected] = false;
+
+            // Jogador expulso não pode permanecer no duto.
+            room.ventStates[ejected] = null;
+        } else {
+            ejected = null;
+        }
+    } else if (winners.length > 1) {
+        tie = true;
+    }
+
+    console.log("================================");
+    console.log("RESULTADO DA VOTAÇÃO");
+    console.log("VOTOS:", counts);
+    console.log("EXPULSO:", ejected);
+    console.log("EMPATE:", tie);
+    console.log("================================");
+
+    room.meeting.active = false;
+
+    sendToRoom(room, {
+        cmd: "meeting_result",
+        content: {
+            ejected,
+            tie,
+            votes: counts
+        }
+    });
+
+    // Remover corpos após a reunião.
+    room.bodies = {};
+
+    resetMeeting(room);
+
+    verificarVitoria(room);
+}
+
+// =====================================
+// VERIFICAR SE TODOS VOTARAM
+// =====================================
+
+function verificarVotos(room) {
+    if (!room || !room.meeting.active) return;
+
+    const vivos = Object.keys(room.players).filter(
+        id => room.alive[id] === true
+    );
+
+    if (vivos.length === 0) return;
+
+    const todosVotaram = vivos.every(
+        id => Object.prototype.hasOwnProperty.call(
+            room.meeting.votes,
+            id
+        )
+    );
+
+    if (todosVotaram) {
+        finalizarReuniao(room);
+    }
+}
+
+// =====================================
 // CONEXÃO
 // =====================================
 
@@ -188,9 +352,9 @@ wss.on("connection", socket => {
                 : {};
 
         switch (data.cmd) {
-            
+
             // =====================================
-            // SAIR DA SALA E VOLTAR AO LOBBY
+            // SAIR DA SALA
             // =====================================
 
             case "leave_room": {
@@ -205,16 +369,19 @@ wss.on("connection", socket => {
                     delete room.alive[uuid];
                     delete room.roles[uuid];
                     delete room.ventStates[uuid];
+                    delete room.bodies[uuid];
+
+                    if (room.meeting.active) {
+                        delete room.meeting.votes[uuid];
+                    }
 
                     playerlist.remove(uuid);
 
-                    // Avisar os outros jogadores.
                     sendToRoom(room, {
                         cmd: "player_disconnected",
                         content: { uuid }
                     });
 
-                    // Se o host saiu, escolher outro jogador.
                     if (room.host === uuid) {
                         const remaining = Object.keys(room.players);
 
@@ -234,14 +401,15 @@ wss.on("connection", socket => {
                         }
                     }
 
-                    // Excluir sala vazia.
                     if (Object.keys(room.players).length === 0) {
                         rooms.delete(code);
                         console.log("Sala removida:", code);
+                    } else {
+                        verificarVotos(room);
+                        verificarVitoria(room);
                     }
                 }
 
-                // Liberar a conexão para criar ou entrar em outra sala.
                 socket.roomId = null;
 
                 socket.send(JSON.stringify({
@@ -249,7 +417,7 @@ wss.on("connection", socket => {
                     content: {}
                 }));
 
-                console.log("Jogador saiu da sala:", uuid, code);
+                console.log("Jogador saiu:", uuid, code);
 
                 break;
             }
@@ -272,6 +440,7 @@ wss.on("connection", socket => {
                 const room = {
                     players: {},
                     host: uuid,
+
                     started: false,
                     starting: false,
                     finished: false,
@@ -282,10 +451,22 @@ wss.on("connection", socket => {
                     taskProgress: 0,
                     completedTasks: new Set(),
 
-                    // Estado dos dutos.
-                    // null = jogador fora dos dutos.
-                    // Objeto = jogador dentro de um duto.
-                    ventStates: {}
+                    ventStates: {},
+
+                    // CORPOS
+                    bodies: {},
+
+                    // REUNIÕES
+                    meeting: {
+                        active: false,
+                        reporter: null,
+                        reason: null,
+                        votes: {},
+                        startedAt: null
+                    },
+
+                    // BOTS
+                    bots: {}
                 };
 
                 rooms.set(code, room);
@@ -307,6 +488,7 @@ wss.on("connection", socket => {
                 }));
 
                 console.log("Sala criada:", code);
+
                 break;
             }
 
@@ -370,6 +552,14 @@ wss.on("connection", socket => {
                     content: { players: others }
                 }));
 
+                // Enviar bots existentes.
+                socket.send(JSON.stringify({
+                    cmd: "spawn_network_bots",
+                    content: {
+                        bots: room.bots
+                    }
+                }));
+
                 for (const id in room.players) {
                     const client = room.players[id];
 
@@ -388,7 +578,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // PEDIR SORTEIO AO GODOT
+            // PEDIR SORTEIO
             // =====================================
 
             case "start_game": {
@@ -417,12 +607,13 @@ wss.on("connection", socket => {
                     content: { players }
                 }));
 
-                console.log("Aguardando sorteio do Godot:", socket.roomId);
+                console.log("Aguardando sorteio:", socket.roomId);
+
                 break;
             }
 
             // =====================================
-            // RECEBER FUNÇÕES SORTEADAS PELO GODOT
+            // RECEBER FUNÇÕES
             // =====================================
 
             case "assign_roles": {
@@ -469,7 +660,7 @@ wss.on("connection", socket => {
                     socket.send(JSON.stringify({
                         cmd: "error",
                         content: {
-                            msg: "O sorteio precisa ter exatamente um impostor."
+                            msg: "Precisa ter exatamente um impostor."
                         }
                     }));
 
@@ -479,10 +670,14 @@ wss.on("connection", socket => {
                 room.roles = {};
                 room.alive = {};
                 room.ventStates = {};
+                room.bodies = {};
+                room.bots = {};
 
                 room.taskProgress = 0;
                 room.completedTasks = new Set();
                 room.finished = false;
+
+                resetMeeting(room);
 
                 for (const id of players) {
                     room.roles[id] = roles[id];
@@ -515,7 +710,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // POSIÇÃO
+            // POSIÇÃO DOS JOGADORES
             // =====================================
 
             case "position": {
@@ -523,8 +718,8 @@ wss.on("connection", socket => {
 
                 if (!room || !room.started || room.finished) return;
                 if (!room.alive[uuid]) return;
+                if (room.meeting.active) return;
 
-                // Não aceitar movimento enquanto estiver no duto.
                 if (room.ventStates[uuid] !== null) return;
 
                 playerlist.update(uuid, content);
@@ -532,25 +727,93 @@ wss.on("connection", socket => {
                 const player = playerlist.get(uuid);
                 if (!player) return;
 
-                for (const id in room.players) {
-                    const client = room.players[id];
-
-                    if (
-                        client !== socket &&
-                        client.readyState === WebSocket.OPEN
-                    ) {
-                        client.send(JSON.stringify({
-                            cmd: "update_position",
-                            content: {
-                                uuid,
-                                x: player.x,
-                                y: player.y,
-                                z: player.z,
-                                r_y: player.r_y
-                            }
-                        }));
+                sendToRoomExcept(room, socket, {
+                    cmd: "update_position",
+                    content: {
+                        uuid,
+                        x: player.x,
+                        y: player.y,
+                        z: player.z,
+                        r_y: player.r_y
                     }
+                });
+
+                break;
+            }
+
+            // =====================================
+            // BOTS - POSIÇÃO ATUALIZADA
+            // =====================================
+
+            case "bot_position": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+                if (uuid !== room.host) return;
+                if (room.meeting.active) return;
+
+                const botId = String(content.bot_id || "");
+
+                if (!botId || botId.length > 100) return;
+
+                const x = Number(content.x);
+                const y = Number(content.y);
+
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+                const isNew = !room.bots[botId];
+
+                room.bots[botId] = {
+                    bot_id: botId,
+                    username: String(
+                        content.username || botId
+                    ).slice(0, 24),
+                    x,
+                    y
+                };
+
+                if (isNew) {
+                    sendToRoomExcept(room, socket, {
+                        cmd: "spawn_new_bot",
+                        content: {
+                            bot: room.bots[botId]
+                        }
+                    });
                 }
+
+                sendToRoomExcept(room, socket, {
+                    cmd: "update_bot_position",
+                    content: {
+                        bot_id: botId,
+                        x,
+                        y
+                    }
+                });
+
+                break;
+            }
+
+            // =====================================
+            // REMOVER BOT
+            // =====================================
+
+            case "bot_remove": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || uuid !== room.host) return;
+
+                const botId = String(content.bot_id || "");
+
+                if (!room.bots[botId]) return;
+
+                delete room.bots[botId];
+
+                sendToRoom(room, {
+                    cmd: "remove_network_bot",
+                    content: {
+                        bot_id: botId
+                    }
+                });
 
                 break;
             }
@@ -563,18 +826,15 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
+                if (room.meeting.active) return;
 
-                // Somente impostor vivo.
                 if (room.roles[uuid] !== "impostor") return;
                 if (room.alive[uuid] !== true) return;
-
-                // Não pode entrar se já estiver em um duto.
                 if (room.ventStates[uuid] !== null) return;
 
                 const from = Number(content.from);
                 const to = Number(content.to);
 
-                // Validar os quatro dutos.
                 if (
                     !Number.isInteger(from) ||
                     !Number.isInteger(to) ||
@@ -584,37 +844,22 @@ wss.on("connection", socket => {
                     return;
                 }
 
-                // Sequência: 1 -> 2 -> 3 -> 4 -> 1.
                 const destinoEsperado = (from + 1) % 4;
 
-                if (to !== destinoEsperado) {
-                    console.log("Destino de duto inválido:", uuid);
-                    return;
-                }
+                if (to !== destinoEsperado) return;
 
-                // Registrar que o impostor entrou.
                 room.ventStates[uuid] = {
-                    from: from,
-                    to: to
+                    from,
+                    to
                 };
 
-                console.log(
-                    "Impostor entrou no duto:",
-                    uuid,
-                    "Origem:",
-                    from + 1,
-                    "Destino:",
-                    to + 1
-                );
-
-                // Avisar todos os jogadores.
                 sendToRoom(room, {
                     cmd: "vent_event",
                     content: {
-                        uuid: uuid,
+                        uuid,
                         action: "enter",
-                        from: from,
-                        to: to,
+                        from,
+                        to,
                         vent: from
                     }
                 });
@@ -630,38 +875,28 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
+                if (room.meeting.active) return;
 
                 if (room.roles[uuid] !== "impostor") return;
                 if (room.alive[uuid] !== true) return;
 
                 const state = room.ventStates[uuid];
 
-                // Precisa estar dentro de um duto.
                 if (!state) return;
 
                 const vent = Number(content.vent);
 
-                // Só pode sair no destino registrado.
                 if (!Number.isInteger(vent)) return;
                 if (vent !== state.to) return;
 
-                console.log(
-                    "Impostor saiu do duto:",
-                    uuid,
-                    "Duto:",
-                    vent + 1
-                );
-
-                // Marcar como fora do duto.
                 room.ventStates[uuid] = null;
 
-                // Avisar todos os jogadores.
                 sendToRoom(room, {
                     cmd: "vent_event",
                     content: {
-                        uuid: uuid,
+                        uuid,
                         action: "exit",
-                        vent: vent
+                        vent
                     }
                 });
 
@@ -676,6 +911,7 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
+                if (room.meeting.active) return;
                 if (room.roles[uuid] !== "crewmate") return;
                 if (!room.alive[uuid]) return;
 
@@ -705,9 +941,6 @@ wss.on("connection", socket => {
                     }
                 });
 
-                console.log("Task concluída:", taskId);
-                console.log("Progresso:", room.taskProgress + "%");
-
                 if (room.taskProgress >= 100) {
                     finalizarPartida(room, "crewmates");
                 }
@@ -716,35 +949,177 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // ELIMINAR
+            // ELIMINAR JOGADOR
             // =====================================
 
             case "kill": {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
+                if (room.meeting.active) return;
 
                 const target = String(content.uuid || "");
 
                 if (room.roles[uuid] !== "impostor") return;
                 if (!room.alive[uuid]) return;
+                if (room.ventStates[uuid] !== null) return;
+
                 if (target === uuid) return;
                 if (!room.players[target]) return;
                 if (room.roles[target] !== "crewmate") return;
                 if (!room.alive[target]) return;
+                if (room.ventStates[target] !== null) return;
+
+                const killer = playerlist.get(uuid);
+                const victim = playerlist.get(target);
+
+                if (!killer || !victim) return;
+
+                const distance = Math.hypot(
+                    killer.x - victim.x,
+                    killer.y - victim.y
+                );
+
+                if (distance > KILL_DISTANCE) return;
 
                 room.alive[target] = false;
+
+                // Registrar corpo.
+                room.bodies[target] = {
+                    uuid: target,
+                    x: victim.x,
+                    y: victim.y
+                };
 
                 console.log("Jogador eliminado:", target);
 
                 sendToRoom(room, {
                     cmd: "player_killed",
                     content: {
-                        uuid: target
+                        uuid: target,
+                        body: room.bodies[target]
                     }
                 });
 
                 verificarVitoria(room);
+
+                break;
+            }
+
+            // =====================================
+            // REPORTAR CORPO
+            // =====================================
+
+            case "report_body": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+                if (!room.alive[uuid]) return;
+                if (room.meeting.active) return;
+                if (room.ventStates[uuid] !== null) return;
+
+                const target = String(content.uuid || "");
+
+                if (!target || !room.bodies[target]) return;
+
+                const reporter = playerlist.get(uuid);
+                const body = room.bodies[target];
+
+                if (!reporter) return;
+
+                const distance = Math.hypot(
+                    reporter.x - body.x,
+                    reporter.y - body.y
+                );
+
+                if (distance > REPORT_DISTANCE) return;
+
+                iniciarReuniao(
+                    room,
+                    uuid,
+                    "body_report",
+                    target
+                );
+
+                break;
+            }
+
+            // =====================================
+            // REUNIÃO DE EMERGÊNCIA
+            // =====================================
+
+            case "meeting_start": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+                if (!room.alive[uuid]) return;
+                if (room.meeting.active) return;
+                if (room.ventStates[uuid] !== null) return;
+
+                iniciarReuniao(
+                    room,
+                    uuid,
+                    "emergency"
+                );
+
+                break;
+            }
+
+            // =====================================
+            // VOTAR
+            // =====================================
+
+            case "meeting_vote": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.meeting.active) return;
+                if (room.finished) return;
+                if (!room.alive[uuid]) return;
+
+                const target = String(content.target || "");
+
+                if (!target) return;
+
+                if (
+                    target !== "skip" &&
+                    (
+                        !room.players[target] ||
+                        room.alive[target] !== true
+                    )
+                ) {
+                    return;
+                }
+
+                // Não votar duas vezes.
+                if (
+                    Object.prototype.hasOwnProperty.call(
+                        room.meeting.votes,
+                        uuid
+                    )
+                ) {
+                    return;
+                }
+
+                room.meeting.votes[uuid] = target;
+
+                const vivos = Object.keys(room.players).filter(
+                    id => room.alive[id] === true
+                );
+
+                const totalVotes = Object.keys(
+                    room.meeting.votes
+                ).length;
+
+                sendToRoom(room, {
+                    cmd: "vote_received",
+                    content: {
+                        uuid,
+                        total_votes: totalVotes,
+                        total_alive: vivos.length
+                    }
+                });
+
+                verificarVotos(room);
 
                 break;
             }
@@ -758,11 +1133,15 @@ wss.on("connection", socket => {
 
                 if (!room) return;
 
+                const msg = String(content.msg || "").slice(0, 300);
+
+                if (!msg.trim()) return;
+
                 sendToRoom(room, {
                     cmd: "new_chat_message",
                     content: {
                         uuid,
-                        msg: content.msg
+                        msg
                     }
                 });
 
@@ -780,7 +1159,8 @@ wss.on("connection", socket => {
 
         playerlist.remove(uuid);
 
-        const room = rooms.get(socket.roomId);
+        const code = socket.roomId;
+        const room = rooms.get(code);
 
         if (!room) return;
 
@@ -788,26 +1168,44 @@ wss.on("connection", socket => {
         delete room.alive[uuid];
         delete room.roles[uuid];
         delete room.ventStates[uuid];
+        delete room.bodies[uuid];
 
-        for (const id in room.players) {
-            const client = room.players[id];
-
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                    cmd: "player_disconnected",
-                    content: { uuid }
-                }));
-            }
+        if (room.meeting.active) {
+            delete room.meeting.votes[uuid];
         }
 
+        sendToRoom(room, {
+            cmd: "player_disconnected",
+            content: { uuid }
+        });
+
         if (Object.keys(room.players).length === 0) {
-            rooms.delete(socket.roomId);
+            rooms.delete(code);
+            console.log("Sala removida:", code);
             return;
+        }
+
+        // Trocar host.
+        if (room.host === uuid) {
+            room.host = Object.keys(room.players)[0];
+
+            const newHost = room.players[room.host];
+
+            if (newHost.readyState === WebSocket.OPEN) {
+                newHost.send(JSON.stringify({
+                    cmd: "host_changed",
+                    content: {
+                        uuid: room.host
+                    }
+                }));
+            }
         }
 
         if (room.starting) {
             room.starting = false;
         }
+
+        verificarVotos(room);
 
         if (room.started && !room.finished) {
             verificarVitoria(room);
