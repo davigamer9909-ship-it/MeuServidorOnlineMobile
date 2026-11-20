@@ -11,12 +11,11 @@ const server = app.listen(PORT, () => {
 });
 
 const wss = new WebSocket.Server({ server });
-
 const rooms = new Map();
 
-// ========================
-// GERAR CÓDIGO DA SALA
-// ========================
+// =====================================
+// CÓDIGO DA SALA
+// =====================================
 
 function generateRoomCode(length = 5) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -29,30 +28,28 @@ function generateRoomCode(length = 5) {
     return result;
 }
 
-// ========================
-// LISTA DE JOGADORES
-// ========================
+// =====================================
+// JOGADORES
+// =====================================
 
 const playerlist = {
     players: [],
 
     get(uuid) {
-        return this.players.find(player => player.uuid === uuid);
+        return this.players.find(p => p.uuid === uuid);
     },
 
     add(uuid, roomCode) {
-        const jogadoresNaSala = this.getByRoom(roomCode);
+        const jogadores = this.getByRoom(roomCode);
 
-        const spawnPositions = [
+        const positions = [
             { x: 0, y: 0 },
             { x: 100, y: 0 },
             { x: 0, y: 100 },
             { x: 100, y: 100 }
         ];
 
-        const spawn = spawnPositions[
-            jogadoresNaSala.length % spawnPositions.length
-        ];
+        const spawn = positions[jogadores.length % positions.length];
 
         const player = {
             uuid,
@@ -64,54 +61,39 @@ const playerlist = {
         };
 
         this.players.push(player);
-
-        console.log(`Jogador ${uuid} criado.`);
-
         return player;
     },
 
     update(uuid, content) {
         const player = this.get(uuid);
-
         if (!player) return;
 
-        if (Number.isFinite(content.x))
-            player.x = content.x;
-
-        if (Number.isFinite(content.y))
-            player.y = content.y;
-
-        if (Number.isFinite(content.z))
-            player.z = content.z;
-
-        if (Number.isFinite(content.r_y))
-            player.r_y = content.r_y;
+        if (Number.isFinite(content.x)) player.x = content.x;
+        if (Number.isFinite(content.y)) player.y = content.y;
+        if (Number.isFinite(content.z)) player.z = content.z;
+        if (Number.isFinite(content.r_y)) player.r_y = content.r_y;
     },
 
     remove(uuid) {
-        this.players = this.players.filter(
-            player => player.uuid !== uuid
-        );
+        this.players = this.players.filter(p => p.uuid !== uuid);
     },
 
     getByRoom(roomCode) {
-        return this.players.filter(
-            player => player.room === roomCode
-        );
+        return this.players.filter(p => p.room === roomCode);
     }
 };
 
-// ========================
+// =====================================
 // ENVIAR PARA A SALA
-// ========================
+// =====================================
 
 function sendToRoom(room, message) {
     if (!room) return;
 
     const packet = JSON.stringify(message);
 
-    for (const clientUuid in room.players) {
-        const client = room.players[clientUuid];
+    for (const id in room.players) {
+        const client = room.players[id];
 
         if (client.readyState === WebSocket.OPEN) {
             client.send(packet);
@@ -119,9 +101,9 @@ function sendToRoom(room, message) {
     }
 }
 
-// ========================
-// VERIFICAR VITÓRIA
-// ========================
+// =====================================
+// VITÓRIA
+// =====================================
 
 function verificarVitoria(room) {
     const vivos = Object.keys(room.players).filter(
@@ -141,12 +123,8 @@ function verificarVitoria(room) {
 
         sendToRoom(room, {
             cmd: "game_over",
-            content: {
-                winner: "crewmates"
-            }
+            content: { winner: "crewmates" }
         });
-
-        console.log("Crewmates venceram!");
 
         return;
     }
@@ -159,46 +137,33 @@ function verificarVitoria(room) {
 
         sendToRoom(room, {
             cmd: "game_over",
-            content: {
-                winner: "impostor"
-            }
+            content: { winner: "impostor" }
         });
-
-        console.log("Impostor venceu!");
     }
 }
 
-// ========================
+// =====================================
 // CONEXÃO
-// ========================
+// =====================================
 
-wss.on("connection", (socket) => {
-
+wss.on("connection", socket => {
     const uuid = uuidv4();
-
     socket.uuid = uuid;
 
-    console.log(`Cliente conectado: ${uuid}`);
+    console.log("Cliente conectado:", uuid);
 
     socket.send(JSON.stringify({
         cmd: "joined_server",
-        content: {
-            uuid
-        }
+        content: { uuid }
     }));
 
-    // ========================
-    // RECEBER MENSAGENS
-    // ========================
-
-    socket.on("message", (message) => {
-
+    socket.on("message", message => {
         let data;
 
         try {
             data = JSON.parse(message.toString());
         } catch (err) {
-            console.error("Erro ao interpretar mensagem:", err);
+            console.error("JSON inválido:", err);
             return;
         }
 
@@ -211,134 +176,113 @@ wss.on("connection", (socket) => {
 
         switch (data.cmd) {
 
-            // ========================
+            // =====================================
             // CRIAR SALA
-            // ========================
+            // =====================================
 
             case "create_room": {
-
                 if (socket.roomId) return;
 
-                let newRoomId;
+                let code;
 
                 do {
-                    newRoomId = generateRoomCode();
-                } while (rooms.has(newRoomId));
+                    code = generateRoomCode();
+                } while (rooms.has(code));
 
-                socket.roomId = newRoomId;
+                socket.roomId = code;
 
                 const room = {
                     players: {},
                     host: uuid,
                     started: false,
+                    starting: false,
                     finished: false,
                     roles: {},
                     alive: {},
-
-                    // SISTEMA DE TASKS
                     taskProgress: 0,
                     completedTasks: new Set()
                 };
 
-                rooms.set(newRoomId, room);
-
+                rooms.set(code, room);
                 room.players[uuid] = socket;
 
-                const newPlayer = playerlist.add(uuid, newRoomId);
-
-                console.log(`Sala ${newRoomId} criada.`);
+                const player = playerlist.add(uuid, code);
 
                 socket.send(JSON.stringify({
                     cmd: "room_created",
                     content: {
-                        code: newRoomId,
+                        code,
                         is_host: true
                     }
                 }));
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
-                    content: {
-                        player: newPlayer
-                    }
+                    content: { player }
                 }));
 
+                console.log("Sala criada:", code);
                 break;
             }
 
-            // ========================
+            // =====================================
             // ENTRAR NA SALA
-            // ========================
+            // =====================================
 
             case "join_room": {
-
                 if (socket.roomId) return;
 
-                const roomCode = String(content.code || "")
+                const code = String(content.code || "")
                     .trim()
                     .toUpperCase();
 
-                const roomToJoin = rooms.get(roomCode);
+                const room = rooms.get(code);
 
-                if (!roomToJoin) {
+                if (!room) {
                     socket.send(JSON.stringify({
                         cmd: "error",
-                        content: {
-                            msg: "Sala não encontrada."
-                        }
+                        content: { msg: "Sala não encontrada." }
                     }));
-
                     return;
                 }
 
-                if (roomToJoin.started) {
+                if (room.started || room.starting) {
                     socket.send(JSON.stringify({
                         cmd: "error",
-                        content: {
-                            msg: "A partida já começou."
-                        }
+                        content: { msg: "A partida já começou." }
                     }));
-
                     return;
                 }
 
-                socket.roomId = roomCode;
+                socket.roomId = code;
+                room.players[uuid] = socket;
 
-                roomToJoin.players[uuid] = socket;
-
-                const newPlayer = playerlist.add(uuid, roomCode);
-
-                console.log(`Jogador entrou na sala ${roomCode}.`);
+                const player = playerlist.add(uuid, code);
 
                 socket.send(JSON.stringify({
                     cmd: "room_joined",
                     content: {
-                        code: roomCode,
+                        code,
                         is_host: false
                     }
                 }));
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_local_player",
-                    content: {
-                        player: newPlayer
-                    }
+                    content: { player }
                 }));
 
-                const roomPlayers = playerlist
-                    .getByRoom(roomCode)
-                    .filter(player => player.uuid !== uuid);
+                const others = playerlist
+                    .getByRoom(code)
+                    .filter(p => p.uuid !== uuid);
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_network_players",
-                    content: {
-                        players: roomPlayers
-                    }
+                    content: { players: others }
                 }));
 
-                for (const clientUuid in roomToJoin.players) {
-
-                    const client = roomToJoin.players[clientUuid];
+                for (const id in room.players) {
+                    const client = room.players[id];
 
                     if (
                         client !== socket &&
@@ -346,9 +290,7 @@ wss.on("connection", (socket) => {
                     ) {
                         client.send(JSON.stringify({
                             cmd: "spawn_new_player",
-                            content: {
-                                player: newPlayer
-                            }
+                            content: { player }
                         }));
                     }
                 }
@@ -356,51 +298,113 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // INICIAR PARTIDA
-            // ========================
+            // =====================================
+            // PEDIR SORTEIO AO GODOT
+            // =====================================
 
             case "start_game": {
-
                 const room = rooms.get(socket.roomId);
 
                 if (!room) return;
                 if (uuid !== room.host) return;
-                if (room.started) return;
+                if (room.started || room.starting) return;
 
-                const jogadores = Object.keys(room.players);
+                const players = Object.keys(room.players);
 
-                if (jogadores.length < 2) {
+                if (players.length < 2) {
                     socket.send(JSON.stringify({
                         cmd: "error",
                         content: {
                             msg: "É necessário pelo menos 2 jogadores."
                         }
                     }));
+                    return;
+                }
+
+                room.starting = true;
+
+                socket.send(JSON.stringify({
+                    cmd: "choose_roles",
+                    content: {
+                        players
+                    }
+                }));
+
+                console.log("Aguardando sorteio do Godot:", socket.roomId);
+                break;
+            }
+
+            // =====================================
+            // RECEBER FUNÇÕES SORTEADAS PELO GODOT
+            // =====================================
+
+            case "assign_roles": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room) return;
+                if (uuid !== room.host) return;
+                if (!room.starting || room.started) return;
+
+                const roles = content.roles;
+
+                if (!roles || typeof roles !== "object") return;
+
+                const players = Object.keys(room.players);
+                const roleIds = Object.keys(roles);
+
+                // Todos os jogadores precisam ter uma função.
+                if (players.length !== roleIds.length) {
+                    room.starting = false;
+                    return;
+                }
+
+                for (const id of players) {
+                    if (!Object.prototype.hasOwnProperty.call(roles, id)) {
+                        room.starting = false;
+                        return;
+                    }
+
+                    if (
+                        roles[id] !== "impostor" &&
+                        roles[id] !== "crewmate"
+                    ) {
+                        room.starting = false;
+                        return;
+                    }
+                }
+
+                // Exatamente um impostor.
+                const impostors = players.filter(
+                    id => roles[id] === "impostor"
+                );
+
+                if (impostors.length !== 1) {
+                    room.starting = false;
+
+                    socket.send(JSON.stringify({
+                        cmd: "error",
+                        content: {
+                            msg: "O sorteio precisa ter exatamente um impostor."
+                        }
+                    }));
 
                     return;
                 }
 
-                const indice = Math.floor(
-                    Math.random() * jogadores.length
-                );
+                room.roles = {};
 
-                const impostor = jogadores[indice];
-
-                room.started = true;
-
-                for (const id of jogadores) {
-                    room.roles[id] =
-                        id === impostor ? "impostor" : "crewmate";
-
+                for (const id of players) {
+                    room.roles[id] = roles[id];
                     room.alive[id] = true;
                 }
 
+                room.started = true;
+                room.starting = false;
+
                 console.log("Partida iniciada:", socket.roomId);
-                console.log("Impostor:", impostor);
+                console.log("Impostor:", impostors[0]);
 
-                for (const id of jogadores) {
-
+                for (const id of players) {
                     const client = room.players[id];
 
                     if (client.readyState === WebSocket.OPEN) {
@@ -418,12 +422,11 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // ATUALIZAR POSIÇÃO
-            // ========================
+            // =====================================
+            // POSIÇÃO
+            // =====================================
 
             case "position": {
-
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
@@ -432,12 +435,10 @@ wss.on("connection", (socket) => {
                 playerlist.update(uuid, content);
 
                 const player = playerlist.get(uuid);
-
                 if (!player) return;
 
-                for (const clientUuid in room.players) {
-
-                    const client = room.players[clientUuid];
+                for (const id in room.players) {
+                    const client = room.players[id];
 
                     if (
                         client !== socket &&
@@ -459,48 +460,29 @@ wss.on("connection", (socket) => {
                 break;
             }
 
-            // ========================
-            // CONCLUIR TASK
-            // ========================
+            // =====================================
+            // TASKS
+            // =====================================
 
             case "task": {
-
                 const room = rooms.get(socket.roomId);
 
-                if (!room || !room.started || room.finished)
-                    return;
-
-                if (room.roles[uuid] !== "crewmate")
-                    return;
-
-                if (!room.alive[uuid])
-                    return;
+                if (!room || !room.started || room.finished) return;
+                if (room.roles[uuid] !== "crewmate") return;
+                if (!room.alive[uuid]) return;
 
                 const taskId = String(content.task_id || "");
 
-                if (!taskId) return;
-
-                if (taskId.length > 200) return;
-
-                // Impedir duplicação
-                if (room.completedTasks.has(taskId)) {
-                    console.log("Task já concluída:", taskId);
-                    return;
-                }
+                if (!taskId || taskId.length > 200) return;
+                if (room.completedTasks.has(taskId)) return;
 
                 room.completedTasks.add(taskId);
 
-                // Cada task vale 10%
                 room.taskProgress = Math.min(
                     room.taskProgress + 10,
                     100
                 );
 
-                console.log(
-                    `Task ${taskId} concluída por ${uuid}. Progresso: ${room.taskProgress}%`
-                );
-
-                // Atualizar barra de todos
                 sendToRoom(room, {
                     cmd: "task_progress",
                     content: {
@@ -508,7 +490,6 @@ wss.on("connection", (socket) => {
                     }
                 });
 
-                // Remover task para todos
                 sendToRoom(room, {
                     cmd: "task_completed",
                     content: {
@@ -516,53 +497,45 @@ wss.on("connection", (socket) => {
                     }
                 });
 
+                console.log("Task concluída:", taskId);
                 break;
             }
 
-            // ========================
-            // ELIMINAR JOGADOR
-            // ========================
+            // =====================================
+            // ELIMINAR
+            // =====================================
 
             case "kill": {
-
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
 
-                const targetUuid = String(content.uuid || "");
+                const target = String(content.uuid || "");
 
                 if (room.roles[uuid] !== "impostor") return;
                 if (!room.alive[uuid]) return;
-                if (targetUuid === uuid) return;
+                if (target === uuid) return;
+                if (!room.players[target]) return;
+                if (room.roles[target] !== "crewmate") return;
+                if (!room.alive[target]) return;
 
-                if (!room.players[targetUuid]) return;
-                if (room.roles[targetUuid] !== "crewmate") return;
-                if (!room.alive[targetUuid]) return;
-
-                room.alive[targetUuid] = false;
-
-                console.log(`${uuid} eliminou ${targetUuid}`);
+                room.alive[target] = false;
 
                 sendToRoom(room, {
                     cmd: "player_killed",
-                    content: {
-                        uuid: targetUuid
-                    }
+                    content: { uuid: target }
                 });
 
                 verificarVitoria(room);
-
                 break;
             }
 
-            // ========================
+            // =====================================
             // CHAT
-            // ========================
+            // =====================================
 
             case "chat": {
-
                 const room = rooms.get(socket.roomId);
-
                 if (!room) return;
 
                 sendToRoom(room, {
@@ -578,52 +551,45 @@ wss.on("connection", (socket) => {
         }
     });
 
-    // ========================
+    // =====================================
     // DESCONECTAR
-    // ========================
+    // =====================================
 
     socket.on("close", () => {
-
-        console.log(`Cliente desconectado: ${uuid}`);
+        console.log("Cliente desconectado:", uuid);
 
         playerlist.remove(uuid);
 
         const room = rooms.get(socket.roomId);
 
-        if (room) {
+        if (!room) return;
 
-            delete room.players[uuid];
+        delete room.players[uuid];
+        delete room.alive[uuid];
+        delete room.roles[uuid];
 
-            if (room.started && !room.finished) {
-                delete room.alive[uuid];
-                delete room.roles[uuid];
+        for (const id in room.players) {
+            const client = room.players[id];
+
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                    cmd: "player_disconnected",
+                    content: { uuid }
+                }));
             }
+        }
 
-            for (const clientUuid in room.players) {
+        if (Object.keys(room.players).length === 0) {
+            rooms.delete(socket.roomId);
+            return;
+        }
 
-                const client = room.players[clientUuid];
+        if (room.starting) {
+            room.starting = false;
+        }
 
-                if (client.readyState === WebSocket.OPEN) {
-
-                    client.send(JSON.stringify({
-                        cmd: "player_disconnected",
-                        content: {
-                            uuid
-                        }
-                    }));
-                }
-            }
-
-            if (Object.keys(room.players).length === 0) {
-
-                rooms.delete(socket.roomId);
-
-                console.log(`Sala ${socket.roomId} removida.`);
-
-            } else if (room.started && !room.finished) {
-
-                verificarVitoria(room);
-            }
+        if (room.started && !room.finished) {
+            verificarVitoria(room);
         }
     });
 });
