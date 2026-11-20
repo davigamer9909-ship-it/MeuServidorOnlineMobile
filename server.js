@@ -151,7 +151,10 @@ function verificarVitoria(room) {
         return;
     }
 
-    if (crewmates.length === 0 || impostores.length >= crewmates.length) {
+    if (
+        crewmates.length === 0 ||
+        impostores.length >= crewmates.length
+    ) {
         room.finished = true;
 
         sendToRoom(room, {
@@ -199,7 +202,12 @@ wss.on("connection", (socket) => {
             return;
         }
 
-        const content = data.content || {};
+        if (!data || typeof data !== "object") return;
+
+        const content =
+            data.content && typeof data.content === "object"
+                ? data.content
+                : {};
 
         switch (data.cmd) {
 
@@ -225,7 +233,11 @@ wss.on("connection", (socket) => {
                     started: false,
                     finished: false,
                     roles: {},
-                    alive: {}
+                    alive: {},
+
+                    // SISTEMA DE TASKS
+                    taskProgress: 0,
+                    completedTasks: new Set()
                 };
 
                 rooms.set(newRoomId, room);
@@ -369,7 +381,6 @@ wss.on("connection", (socket) => {
                     return;
                 }
 
-                // Escolher impostor
                 const indice = Math.floor(
                     Math.random() * jogadores.length
                 );
@@ -388,7 +399,6 @@ wss.on("connection", (socket) => {
                 console.log("Partida iniciada:", socket.roomId);
                 console.log("Impostor:", impostor);
 
-                // Enviar função individualmente
                 for (const id of jogadores) {
 
                     const client = room.players[id];
@@ -445,6 +455,66 @@ wss.on("connection", (socket) => {
                         }));
                     }
                 }
+
+                break;
+            }
+
+            // ========================
+            // CONCLUIR TASK
+            // ========================
+
+            case "task": {
+
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished)
+                    return;
+
+                if (room.roles[uuid] !== "crewmate")
+                    return;
+
+                if (!room.alive[uuid])
+                    return;
+
+                const taskId = String(content.task_id || "");
+
+                if (!taskId) return;
+
+                if (taskId.length > 200) return;
+
+                // Impedir duplicação
+                if (room.completedTasks.has(taskId)) {
+                    console.log("Task já concluída:", taskId);
+                    return;
+                }
+
+                room.completedTasks.add(taskId);
+
+                // Cada task vale 10%
+                room.taskProgress = Math.min(
+                    room.taskProgress + 10,
+                    100
+                );
+
+                console.log(
+                    `Task ${taskId} concluída por ${uuid}. Progresso: ${room.taskProgress}%`
+                );
+
+                // Atualizar barra de todos
+                sendToRoom(room, {
+                    cmd: "task_progress",
+                    content: {
+                        value: room.taskProgress
+                    }
+                });
+
+                // Remover task para todos
+                sendToRoom(room, {
+                    cmd: "task_completed",
+                    content: {
+                        task_id: taskId
+                    }
+                });
 
                 break;
             }
