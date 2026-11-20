@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 9090;
 
 const server = app.listen(PORT, () => {
-    console.log(`Servidor iniciado na porta: ${PORT}`);
+    console.log("Servidor iniciado na porta:", PORT);
 });
 
 const wss = new WebSocket.Server({ server });
@@ -102,12 +102,36 @@ function sendToRoom(room, message) {
 }
 
 // =====================================
-// VITÓRIA
+// FINALIZAR PARTIDA
+// =====================================
+
+function finalizarPartida(room, winner) {
+    if (!room || room.finished) return;
+
+    room.finished = true;
+
+    console.log("================================");
+    console.log("PARTIDA FINALIZADA!");
+    console.log("VENCEDORES:", winner);
+    console.log("================================");
+
+    sendToRoom(room, {
+        cmd: "game_over",
+        content: {
+            winner: winner
+        }
+    });
+}
+
+// =====================================
+// VERIFICAR VITÓRIA
 // =====================================
 
 function verificarVitoria(room) {
+    if (!room || room.finished || !room.started) return;
+
     const vivos = Object.keys(room.players).filter(
-        id => room.alive[id]
+        id => room.alive[id] === true
     );
 
     const impostores = vivos.filter(
@@ -118,27 +142,18 @@ function verificarVitoria(room) {
         id => room.roles[id] === "crewmate"
     );
 
+    // Todos os impostores foram eliminados.
     if (impostores.length === 0) {
-        room.finished = true;
-
-        sendToRoom(room, {
-            cmd: "game_over",
-            content: { winner: "crewmates" }
-        });
-
+        finalizarPartida(room, "crewmates");
         return;
     }
 
+    // O impostor alcançou ou superou os tripulantes vivos.
     if (
         crewmates.length === 0 ||
         impostores.length >= crewmates.length
     ) {
-        room.finished = true;
-
-        sendToRoom(room, {
-            cmd: "game_over",
-            content: { winner: "impostor" }
-        });
+        finalizarPartida(room, "impostor");
     }
 }
 
@@ -325,9 +340,7 @@ wss.on("connection", socket => {
 
                 socket.send(JSON.stringify({
                     cmd: "choose_roles",
-                    content: {
-                        players
-                    }
+                    content: { players }
                 }));
 
                 console.log("Aguardando sorteio do Godot:", socket.roomId);
@@ -352,7 +365,6 @@ wss.on("connection", socket => {
                 const players = Object.keys(room.players);
                 const roleIds = Object.keys(roles);
 
-                // Todos os jogadores precisam ter uma função.
                 if (players.length !== roleIds.length) {
                     room.starting = false;
                     return;
@@ -373,7 +385,6 @@ wss.on("connection", socket => {
                     }
                 }
 
-                // Exatamente um impostor.
                 const impostors = players.filter(
                     id => roles[id] === "impostor"
                 );
@@ -392,6 +403,10 @@ wss.on("connection", socket => {
                 }
 
                 room.roles = {};
+                room.alive = {};
+                room.taskProgress = 0;
+                room.completedTasks = new Set();
+                room.finished = false;
 
                 for (const id of players) {
                     room.roles[id] = roles[id];
@@ -498,6 +513,13 @@ wss.on("connection", socket => {
                 });
 
                 console.log("Task concluída:", taskId);
+                console.log("Progresso:", room.taskProgress + "%");
+
+                // Tarefas chegaram a 100%.
+                if (room.taskProgress >= 100) {
+                    finalizarPartida(room, "crewmates");
+                }
+
                 break;
             }
 
@@ -519,14 +541,22 @@ wss.on("connection", socket => {
                 if (room.roles[target] !== "crewmate") return;
                 if (!room.alive[target]) return;
 
+                // Marca o crewmate como eliminado.
                 room.alive[target] = false;
 
+                console.log("Jogador eliminado:", target);
+
+                // Avisa todos os jogadores.
                 sendToRoom(room, {
                     cmd: "player_killed",
-                    content: { uuid: target }
+                    content: {
+                        uuid: target
+                    }
                 });
 
+                // Verifica se alguém venceu.
                 verificarVitoria(room);
+
                 break;
             }
 
@@ -536,6 +566,7 @@ wss.on("connection", socket => {
 
             case "chat": {
                 const room = rooms.get(socket.roomId);
+
                 if (!room) return;
 
                 sendToRoom(room, {
