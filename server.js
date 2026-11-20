@@ -142,13 +142,11 @@ function verificarVitoria(room) {
         id => room.roles[id] === "crewmate"
     );
 
-    // Todos os impostores foram eliminados.
     if (impostores.length === 0) {
         finalizarPartida(room, "crewmates");
         return;
     }
 
-    // O impostor alcançou ou superou os tripulantes vivos.
     if (
         crewmates.length === 0 ||
         impostores.length >= crewmates.length
@@ -212,10 +210,17 @@ wss.on("connection", socket => {
                     started: false,
                     starting: false,
                     finished: false,
+
                     roles: {},
                     alive: {},
+
                     taskProgress: 0,
-                    completedTasks: new Set()
+                    completedTasks: new Set(),
+
+                    // Estado dos dutos.
+                    // null = jogador fora dos dutos.
+                    // Objeto = jogador dentro de um duto.
+                    ventStates: {}
                 };
 
                 rooms.set(code, room);
@@ -256,7 +261,9 @@ wss.on("connection", socket => {
                 if (!room) {
                     socket.send(JSON.stringify({
                         cmd: "error",
-                        content: { msg: "Sala não encontrada." }
+                        content: {
+                            msg: "Sala não encontrada."
+                        }
                     }));
                     return;
                 }
@@ -264,7 +271,9 @@ wss.on("connection", socket => {
                 if (room.started || room.starting) {
                     socket.send(JSON.stringify({
                         cmd: "error",
-                        content: { msg: "A partida já começou." }
+                        content: {
+                            msg: "A partida já começou."
+                        }
                     }));
                     return;
                 }
@@ -404,6 +413,8 @@ wss.on("connection", socket => {
 
                 room.roles = {};
                 room.alive = {};
+                room.ventStates = {};
+
                 room.taskProgress = 0;
                 room.completedTasks = new Set();
                 room.finished = false;
@@ -411,6 +422,7 @@ wss.on("connection", socket => {
                 for (const id of players) {
                     room.roles[id] = roles[id];
                     room.alive[id] = true;
+                    room.ventStates[id] = null;
                 }
 
                 room.started = true;
@@ -447,6 +459,9 @@ wss.on("connection", socket => {
                 if (!room || !room.started || room.finished) return;
                 if (!room.alive[uuid]) return;
 
+                // Não aceitar movimento enquanto estiver no duto.
+                if (room.ventStates[uuid] !== null) return;
+
                 playerlist.update(uuid, content);
 
                 const player = playerlist.get(uuid);
@@ -471,6 +486,119 @@ wss.on("connection", socket => {
                         }));
                     }
                 }
+
+                break;
+            }
+
+            // =====================================
+            // ENTRAR NO DUTO
+            // =====================================
+
+            case "vent_enter": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+
+                // Somente impostor vivo.
+                if (room.roles[uuid] !== "impostor") return;
+                if (room.alive[uuid] !== true) return;
+
+                // Não pode entrar se já estiver em um duto.
+                if (room.ventStates[uuid] !== null) return;
+
+                const from = Number(content.from);
+                const to = Number(content.to);
+
+                // Validar os quatro dutos.
+                if (
+                    !Number.isInteger(from) ||
+                    !Number.isInteger(to) ||
+                    from < 0 || from > 3 ||
+                    to < 0 || to > 3
+                ) {
+                    return;
+                }
+
+                // Sequência: 1 -> 2 -> 3 -> 4 -> 1.
+                const destinoEsperado = (from + 1) % 4;
+
+                if (to !== destinoEsperado) {
+                    console.log("Destino de duto inválido:", uuid);
+                    return;
+                }
+
+                // Registrar que o impostor entrou.
+                room.ventStates[uuid] = {
+                    from: from,
+                    to: to
+                };
+
+                console.log(
+                    "Impostor entrou no duto:",
+                    uuid,
+                    "Origem:",
+                    from + 1,
+                    "Destino:",
+                    to + 1
+                );
+
+                // Avisar todos os jogadores.
+                sendToRoom(room, {
+                    cmd: "vent_event",
+                    content: {
+                        uuid: uuid,
+                        action: "enter",
+                        from: from,
+                        to: to,
+                        vent: from
+                    }
+                });
+
+                break;
+            }
+
+            // =====================================
+            // SAIR DO DUTO
+            // =====================================
+
+            case "vent_exit": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+
+                if (room.roles[uuid] !== "impostor") return;
+                if (room.alive[uuid] !== true) return;
+
+                const state = room.ventStates[uuid];
+
+                // Precisa estar dentro de um duto.
+                if (!state) return;
+
+                const vent = Number(content.vent);
+
+                // Só pode sair no destino registrado.
+                if (!Number.isInteger(vent)) return;
+                if (vent !== state.to) return;
+
+                console.log(
+                    "Impostor saiu do duto:",
+                    uuid,
+                    "Duto:",
+                    vent + 1
+                );
+
+                // Marcar como fora do duto.
+                room.ventStates[uuid] = null;
+
+                // Avisar todos os jogadores.
+                sendToRoom(room, {
+                    cmd: "vent_event",
+                    content: {
+                        uuid: uuid,
+                        action: "exit",
+                        vent: vent
+                    }
+                });
 
                 break;
             }
@@ -515,7 +643,6 @@ wss.on("connection", socket => {
                 console.log("Task concluída:", taskId);
                 console.log("Progresso:", room.taskProgress + "%");
 
-                // Tarefas chegaram a 100%.
                 if (room.taskProgress >= 100) {
                     finalizarPartida(room, "crewmates");
                 }
@@ -541,12 +668,10 @@ wss.on("connection", socket => {
                 if (room.roles[target] !== "crewmate") return;
                 if (!room.alive[target]) return;
 
-                // Marca o crewmate como eliminado.
                 room.alive[target] = false;
 
                 console.log("Jogador eliminado:", target);
 
-                // Avisa todos os jogadores.
                 sendToRoom(room, {
                     cmd: "player_killed",
                     content: {
@@ -554,7 +679,6 @@ wss.on("connection", socket => {
                     }
                 });
 
-                // Verifica se alguém venceu.
                 verificarVitoria(room);
 
                 break;
@@ -598,6 +722,7 @@ wss.on("connection", socket => {
         delete room.players[uuid];
         delete room.alive[uuid];
         delete room.roles[uuid];
+        delete room.ventStates[uuid];
 
         for (const id in room.players) {
             const client = room.players[id];
