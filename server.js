@@ -181,13 +181,14 @@ function obterNome(room, id) {
 // CRIAR CORPO
 // =====================================
 
-function criarCorpo(room, target, x, y) {
+function criarCorpo(room, target, x, y, killerId = null) {
 	if (!room || room.bodies[target]) return null;
 
 	const body = {
 		uuid: target,
 		x: Number(x),
-		y: Number(y)
+		y: Number(y),
+		killer_id: killerId
 	};
 
 	room.bodies[target] = body;
@@ -198,6 +199,7 @@ function criarCorpo(room, target, x, y) {
 	});
 
 	console.log("CORPO CRIADO:", target, body.x, body.y);
+	console.log("ELIMINADO POR:", killerId || "Desconhecido");
 
 	return body;
 }
@@ -745,9 +747,14 @@ case "bot_report_body": {
 	if (!bot || !body) return;
 	if (room.alive[botId] !== true) return;
 
+	// O bot não pode reportar automaticamente
+	// o corpo que ele mesmo criou.
+	// O self-report é decidido no bot_kill.
+	if (body.killer_id === botId) return;
+
 	const distancia = Math.hypot(
-		bot.x - body.x,
-		bot.y - body.y
+	bot.x - body.x,
+	bot.y - body.y
 	);
 
 	if (distancia > REPORT_DISTANCE) return;
@@ -1395,7 +1402,7 @@ case "bot_report_body": {
 				room.alive[botId] = false;
 				room.botAlive[botId] = false;
 
-				criarCorpo(room, botId, bot.x, bot.y);
+				criarCorpo(room, botId, bot.x, bot.y, uuid);
 
 				sendToRoom(room, {
 					cmd: "remove_network_bot",
@@ -1439,8 +1446,13 @@ case "bot_report_body": {
 
 				room.alive[target] = false;
 
-				const body = criarCorpo(room, target, victim.x, victim.y);
-
+				const body = criarCorpo(
+					room,
+					target,
+					victim.x,
+					victim.y,
+					uuid
+				);
 				sendToRoom(room, {
 					cmd: "player_killed",
 					content: {
@@ -1451,7 +1463,27 @@ case "bot_report_body": {
 				});
 
 				verificarVitoria(room);
-				break;
+
+				// Se a partida acabou, não existe self-report.
+				if (room.finished) break;
+
+				// 20% de chance de self-report.
+				if (room.bodies[target] && Math.random() < 0.20) {
+					console.log(
+					"[SELF REPORT] ",
+					obterNome(room, botId),
+					" reportou o próprio assassinato!"
+				);
+
+				iniciarReuniao(
+					room,
+					botId,
+					"body_report",
+					target
+				);
+}
+
+break;
 			}
 
 			// =====================================
