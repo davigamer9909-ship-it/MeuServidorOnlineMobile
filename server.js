@@ -25,7 +25,9 @@ function generateRoomCode(length = 5) {
     let result = "";
 
     for (let i = 0; i < length; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
+        result += chars.charAt(
+            Math.floor(Math.random() * chars.length)
+        );
     }
 
     return result;
@@ -52,7 +54,9 @@ const playerlist = {
             { x: 100, y: 100 }
         ];
 
-        const spawn = positions[jogadores.length % positions.length];
+        const spawn = positions[
+            jogadores.length % positions.length
+        ];
 
         const player = {
             uuid,
@@ -64,25 +68,42 @@ const playerlist = {
         };
 
         this.players.push(player);
+
         return player;
     },
 
     update(uuid, content) {
         const player = this.get(uuid);
+
         if (!player) return;
 
-        if (Number.isFinite(content.x)) player.x = content.x;
-        if (Number.isFinite(content.y)) player.y = content.y;
-        if (Number.isFinite(content.z)) player.z = content.z;
-        if (Number.isFinite(content.r_y)) player.r_y = content.r_y;
+        if (Number.isFinite(content.x)) {
+            player.x = content.x;
+        }
+
+        if (Number.isFinite(content.y)) {
+            player.y = content.y;
+        }
+
+        if (Number.isFinite(content.z)) {
+            player.z = content.z;
+        }
+
+        if (Number.isFinite(content.r_y)) {
+            player.r_y = content.r_y;
+        }
     },
 
     remove(uuid) {
-        this.players = this.players.filter(p => p.uuid !== uuid);
+        this.players = this.players.filter(
+            p => p.uuid !== uuid
+        );
     },
 
     getByRoom(roomCode) {
-        return this.players.filter(p => p.room === roomCode);
+        return this.players.filter(
+            p => p.room === roomCode
+        );
     }
 };
 
@@ -167,9 +188,12 @@ function finalizarPartida(room, winner) {
 // =====================================
 
 function verificarVitoria(room) {
-    if (!room || room.finished || !room.started) return;
+    if (!room || room.finished || !room.started) {
+        return;
+    }
 
-    const vivos = Object.keys(room.players).filter(
+    // Conta humanos e bots.
+    const vivos = Object.keys(room.alive).filter(
         id => room.alive[id] === true
     );
 
@@ -181,11 +205,18 @@ function verificarVitoria(room) {
         id => room.roles[id] === "crewmate"
     );
 
+    console.log("Participantes vivos:", vivos.length);
+    console.log("Impostores vivos:", impostores.length);
+    console.log("Crewmates vivos:", crewmates.length);
+
+    // Tripulação vence quando não existe impostor vivo.
     if (impostores.length === 0) {
         finalizarPartida(room, "crewmates");
         return;
     }
 
+    // Impostor vence quando alcança ou supera
+    // a quantidade de crewmates vivos.
     if (
         crewmates.length === 0 ||
         impostores.length >= crewmates.length
@@ -198,8 +229,16 @@ function verificarVitoria(room) {
 // INICIAR REUNIÃO
 // =====================================
 
-function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
-    if (!room || !room.started || room.finished) return false;
+function iniciarReuniao(
+    room,
+    reporter,
+    reason,
+    bodyUUID = null
+) {
+    if (!room || !room.started || room.finished) {
+        return false;
+    }
+
     if (room.meeting.active) return false;
     if (room.alive[reporter] !== true) return false;
 
@@ -244,7 +283,10 @@ function finalizarReuniao(room) {
     }
 
     const values = Object.values(counts);
-    const highest = values.length > 0 ? Math.max(...values) : 0;
+
+    const highest = values.length > 0
+        ? Math.max(...values)
+        : 0;
 
     const winners = Object.keys(counts).filter(
         id => counts[id] === highest
@@ -253,13 +295,14 @@ function finalizarReuniao(room) {
     let ejected = null;
     let tie = false;
 
-    if (winners.length === 1 && winners[0] !== "skip") {
+    if (
+        winners.length === 1 &&
+        winners[0] !== "skip"
+    ) {
         ejected = winners[0];
 
         if (room.alive[ejected] === true) {
             room.alive[ejected] = false;
-
-            // Jogador expulso não pode permanecer no duto.
             room.ventStates[ejected] = null;
         } else {
             ejected = null;
@@ -286,7 +329,6 @@ function finalizarReuniao(room) {
         }
     });
 
-    // Remover corpos após a reunião.
     room.bodies = {};
 
     resetMeeting(room);
@@ -295,7 +337,7 @@ function finalizarReuniao(room) {
 }
 
 // =====================================
-// VERIFICAR SE TODOS VOTARAM
+// VERIFICAR SE TODOS OS HUMANOS VOTARAM
 // =====================================
 
 function verificarVotos(room) {
@@ -325,7 +367,9 @@ function verificarVotos(room) {
 
 wss.on("connection", socket => {
     const uuid = uuidv4();
+
     socket.uuid = uuid;
+    socket.roomId = null;
 
     console.log("Cliente conectado:", uuid);
 
@@ -383,14 +427,20 @@ wss.on("connection", socket => {
                     });
 
                     if (room.host === uuid) {
-                        const remaining = Object.keys(room.players);
+                        const remaining = Object.keys(
+                            room.players
+                        );
 
                         if (remaining.length > 0) {
                             room.host = remaining[0];
 
-                            const newHost = room.players[room.host];
+                            const newHost = room.players[
+                                room.host
+                            ];
 
-                            if (newHost.readyState === WebSocket.OPEN) {
+                            if (
+                                newHost.readyState === WebSocket.OPEN
+                            ) {
                                 newHost.send(JSON.stringify({
                                     cmd: "host_changed",
                                     content: {
@@ -403,6 +453,7 @@ wss.on("connection", socket => {
 
                     if (Object.keys(room.players).length === 0) {
                         rooms.delete(code);
+
                         console.log("Sala removida:", code);
                     } else {
                         verificarVotos(room);
@@ -453,10 +504,8 @@ wss.on("connection", socket => {
 
                     ventStates: {},
 
-                    // CORPOS
                     bodies: {},
 
-                    // REUNIÕES
                     meeting: {
                         active: false,
                         reporter: null,
@@ -465,11 +514,13 @@ wss.on("connection", socket => {
                         startedAt: null
                     },
 
-                    // BOTS
-                    bots: {}
+                    bots: {},
+                    botRoles: {},
+                    botAlive: {}
                 };
 
                 rooms.set(code, room);
+
                 room.players[uuid] = socket;
 
                 const player = playerlist.add(uuid, code);
@@ -512,6 +563,7 @@ wss.on("connection", socket => {
                             msg: "Sala não encontrada."
                         }
                     }));
+
                     return;
                 }
 
@@ -522,6 +574,7 @@ wss.on("connection", socket => {
                             msg: "A partida já começou."
                         }
                     }));
+
                     return;
                 }
 
@@ -549,10 +602,11 @@ wss.on("connection", socket => {
 
                 socket.send(JSON.stringify({
                     cmd: "spawn_network_players",
-                    content: { players: others }
+                    content: {
+                        players: others
+                    }
                 }));
 
-                // Enviar bots existentes.
                 socket.send(JSON.stringify({
                     cmd: "spawn_network_bots",
                     content: {
@@ -578,7 +632,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // PEDIR SORTEIO
+            // INICIAR PARTIDA
             // =====================================
 
             case "start_game": {
@@ -590,13 +644,39 @@ wss.on("connection", socket => {
 
                 const players = Object.keys(room.players);
 
-                if (players.length < 2) {
+                if (players.length < 1) return;
+
+                // Receber os nomes dos bots.
+                const names = Array.isArray(content.bot_names)
+                    ? content.bot_names.slice(0, 10)
+                    : [];
+
+                room.bots = {};
+                room.botRoles = {};
+                room.botAlive = {};
+
+                for (let i = 0; i < names.length; i++) {
+                    const botId = "bot_" +
+                        String(i + 1).padStart(2, "0");
+
+                    room.bots[botId] = {
+                        bot_id: botId,
+                        username: String(names[i]).slice(0, 24),
+                        x: 0,
+                        y: 0
+                    };
+                }
+
+                const bots = Object.keys(room.bots);
+
+                if (players.length + bots.length < 2) {
                     socket.send(JSON.stringify({
                         cmd: "error",
                         content: {
-                            msg: "É necessário pelo menos 2 jogadores."
+                            msg: "É necessário pelo menos 2 participantes."
                         }
                     }));
+
                     return;
                 }
 
@@ -604,10 +684,15 @@ wss.on("connection", socket => {
 
                 socket.send(JSON.stringify({
                     cmd: "choose_roles",
-                    content: { players }
+                    content: {
+                        players,
+                        bots
+                    }
                 }));
 
-                console.log("Aguardando sorteio:", socket.roomId);
+                console.log("Sorteio solicitado!");
+                console.log("Jogadores:", players.length);
+                console.log("Bots:", bots.length);
 
                 break;
             }
@@ -625,18 +710,31 @@ wss.on("connection", socket => {
 
                 const roles = content.roles;
 
-                if (!roles || typeof roles !== "object") return;
-
-                const players = Object.keys(room.players);
-                const roleIds = Object.keys(roles);
-
-                if (players.length !== roleIds.length) {
+                if (!roles || typeof roles !== "object") {
                     room.starting = false;
                     return;
                 }
 
-                for (const id of players) {
-                    if (!Object.prototype.hasOwnProperty.call(roles, id)) {
+                const players = Object.keys(room.players);
+                const bots = Object.keys(room.bots);
+
+                const participants = [
+                    ...players,
+                    ...bots
+                ];
+
+                const roleIds = Object.keys(roles);
+
+                if (roleIds.length !== participants.length) {
+                    room.starting = false;
+                    return;
+                }
+
+                for (const id of participants) {
+                    if (!Object.prototype.hasOwnProperty.call(
+                        roles,
+                        id
+                    )) {
                         room.starting = false;
                         return;
                     }
@@ -650,7 +748,7 @@ wss.on("connection", socket => {
                     }
                 }
 
-                const impostors = players.filter(
+                const impostors = participants.filter(
                     id => roles[id] === "impostor"
                 );
 
@@ -671,7 +769,9 @@ wss.on("connection", socket => {
                 room.alive = {};
                 room.ventStates = {};
                 room.bodies = {};
-                room.bots = {};
+
+                room.botRoles = {};
+                room.botAlive = {};
 
                 room.taskProgress = 0;
                 room.completedTasks = new Set();
@@ -679,31 +779,53 @@ wss.on("connection", socket => {
 
                 resetMeeting(room);
 
-                for (const id of players) {
+                for (const id of participants) {
                     room.roles[id] = roles[id];
                     room.alive[id] = true;
+                }
+
+                for (const id of players) {
                     room.ventStates[id] = null;
+                }
+
+                for (const id of bots) {
+                    room.botRoles[id] = roles[id];
+                    room.botAlive[id] = true;
                 }
 
                 room.started = true;
                 room.starting = false;
 
-                console.log("Partida iniciada:", socket.roomId);
-                console.log("Impostor:", impostors[0]);
+                console.log("================================");
+                console.log("PARTIDA INICIADA");
+                console.log("IMPOSTOR:", impostors[0]);
+                console.log("================================");
 
+                // Enviar papel e dados dos bots para cada humano.
                 for (const id of players) {
                     const client = room.players[id];
 
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({
-                            cmd: "start_game",
-                            content: {
-                                scene: "test_world",
-                                role: room.roles[id],
-                                alive: true
-                            }
-                        }));
+                    if (client.readyState !== WebSocket.OPEN) {
+                        continue;
                     }
+
+                    client.send(JSON.stringify({
+                        cmd: "start_game",
+                        content: {
+                            scene: "test_world",
+                            role: room.roles[id],
+                            alive: true,
+                            roles: room.roles,
+                            bot_roles: room.botRoles
+                        }
+                    }));
+
+                    client.send(JSON.stringify({
+                        cmd: "spawn_network_bots",
+                        content: {
+                            bots: room.bots
+                        }
+                    }));
                 }
 
                 break;
@@ -717,14 +839,14 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
                 if (room.meeting.active) return;
-
                 if (room.ventStates[uuid] !== null) return;
 
                 playerlist.update(uuid, content);
 
                 const player = playerlist.get(uuid);
+
                 if (!player) return;
 
                 sendToRoomExcept(room, socket, {
@@ -742,7 +864,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // BOTS - POSIÇÃO ATUALIZADA
+            // BOT - POSIÇÃO
             // =====================================
 
             case "bot_position": {
@@ -754,32 +876,18 @@ wss.on("connection", socket => {
 
                 const botId = String(content.bot_id || "");
 
-                if (!botId || botId.length > 100) return;
+                if (!room.bots[botId]) return;
+                if (room.alive[botId] !== true) return;
 
                 const x = Number(content.x);
                 const y = Number(content.y);
 
-                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-
-                const isNew = !room.bots[botId];
-
-                room.bots[botId] = {
-                    bot_id: botId,
-                    username: String(
-                        content.username || botId
-                    ).slice(0, 24),
-                    x,
-                    y
-                };
-
-                if (isNew) {
-                    sendToRoomExcept(room, socket, {
-                        cmd: "spawn_new_bot",
-                        content: {
-                            bot: room.bots[botId]
-                        }
-                    });
+                if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                    return;
                 }
+
+                room.bots[botId].x = x;
+                room.bots[botId].y = y;
 
                 sendToRoomExcept(room, socket, {
                     cmd: "update_bot_position",
@@ -789,6 +897,125 @@ wss.on("connection", socket => {
                         y
                     }
                 });
+
+                break;
+            }
+
+            // =====================================
+            // BOT - COMPLETAR TAREFA
+            // =====================================
+
+            case "bot_task": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+                if (uuid !== room.host) return;
+                if (room.meeting.active) return;
+
+                const botId = String(content.bot_id || "");
+                const taskId = String(content.task_id || "");
+
+                if (!room.bots[botId]) return;
+                if (room.alive[botId] !== true) return;
+                if (room.roles[botId] !== "crewmate") return;
+
+                if (!taskId || taskId.length > 200) return;
+
+                if (room.completedTasks.has(taskId)) return;
+
+                room.completedTasks.add(taskId);
+
+                room.taskProgress = Math.min(
+                    room.taskProgress + 10,
+                    100
+                );
+
+                console.log(
+                    "Bot completou tarefa:",
+                    botId,
+                    taskId
+                );
+
+                sendToRoom(room, {
+                    cmd: "task_progress",
+                    content: {
+                        value: room.taskProgress
+                    }
+                });
+
+                sendToRoom(room, {
+                    cmd: "task_completed",
+                    content: {
+                        task_id: taskId
+                    }
+                });
+
+                if (room.taskProgress >= 100) {
+                    finalizarPartida(room, "crewmates");
+                }
+
+                break;
+            }
+
+            // =====================================
+            // BOT - ELIMINAR JOGADOR
+            // =====================================
+
+            case "bot_kill": {
+                const room = rooms.get(socket.roomId);
+
+                if (!room || !room.started || room.finished) return;
+                if (uuid !== room.host) return;
+                if (room.meeting.active) return;
+
+                const botId = String(content.bot_id || "");
+                const target = String(content.target || "");
+
+                if (!room.bots[botId]) return;
+
+                if (room.roles[botId] !== "impostor") return;
+                if (room.alive[botId] !== true) return;
+
+                if (!room.players[target]) return;
+                if (room.roles[target] !== "crewmate") return;
+                if (room.alive[target] !== true) return;
+
+                const bot = room.bots[botId];
+                const victim = playerlist.get(target);
+
+                if (!victim) return;
+
+                const distance = Math.hypot(
+                    bot.x - victim.x,
+                    bot.y - victim.y
+                );
+
+                if (distance > KILL_DISTANCE) return;
+
+                room.alive[target] = false;
+
+                room.bodies[target] = {
+                    uuid: target,
+                    x: victim.x,
+                    y: victim.y
+                };
+
+                console.log(
+                    "Bot eliminou jogador:",
+                    botId,
+                    target
+                );
+
+                sendToRoom(room, {
+                    cmd: "player_killed",
+                    content: {
+                        uuid: target,
+                        killer_id: botId,
+                        body: room.bodies[target]
+                    }
+                });
+
+                verificarVitoria(room);
 
                 break;
             }
@@ -807,6 +1034,10 @@ wss.on("connection", socket => {
                 if (!room.bots[botId]) return;
 
                 delete room.bots[botId];
+                delete room.roles[botId];
+                delete room.alive[botId];
+                delete room.botRoles[botId];
+                delete room.botAlive[botId];
 
                 sendToRoom(room, {
                     cmd: "remove_network_bot",
@@ -814,6 +1045,8 @@ wss.on("connection", socket => {
                         bot_id: botId
                     }
                 });
+
+                verificarVitoria(room);
 
                 break;
             }
@@ -838,8 +1071,10 @@ wss.on("connection", socket => {
                 if (
                     !Number.isInteger(from) ||
                     !Number.isInteger(to) ||
-                    from < 0 || from > 3 ||
-                    to < 0 || to > 3
+                    from < 0 ||
+                    from > 3 ||
+                    to < 0 ||
+                    to > 3
                 ) {
                     return;
                 }
@@ -904,7 +1139,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // TASKS
+            // TASK DO JOGADOR
             // =====================================
 
             case "task": {
@@ -913,7 +1148,7 @@ wss.on("connection", socket => {
                 if (!room || !room.started || room.finished) return;
                 if (room.meeting.active) return;
                 if (room.roles[uuid] !== "crewmate") return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
 
                 const taskId = String(content.task_id || "");
 
@@ -926,6 +1161,8 @@ wss.on("connection", socket => {
                     room.taskProgress + 10,
                     100
                 );
+
+                console.log("Jogador completou tarefa:", uuid, taskId);
 
                 sendToRoom(room, {
                     cmd: "task_progress",
@@ -961,13 +1198,13 @@ wss.on("connection", socket => {
                 const target = String(content.uuid || "");
 
                 if (room.roles[uuid] !== "impostor") return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
                 if (room.ventStates[uuid] !== null) return;
 
                 if (target === uuid) return;
                 if (!room.players[target]) return;
                 if (room.roles[target] !== "crewmate") return;
-                if (!room.alive[target]) return;
+                if (room.alive[target] !== true) return;
                 if (room.ventStates[target] !== null) return;
 
                 const killer = playerlist.get(uuid);
@@ -984,7 +1221,6 @@ wss.on("connection", socket => {
 
                 room.alive[target] = false;
 
-                // Registrar corpo.
                 room.bodies[target] = {
                     uuid: target,
                     x: victim.x,
@@ -1014,7 +1250,7 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
                 if (room.meeting.active) return;
                 if (room.ventStates[uuid] !== null) return;
 
@@ -1052,7 +1288,7 @@ wss.on("connection", socket => {
                 const room = rooms.get(socket.roomId);
 
                 if (!room || !room.started || room.finished) return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
                 if (room.meeting.active) return;
                 if (room.ventStates[uuid] !== null) return;
 
@@ -1074,23 +1310,20 @@ wss.on("connection", socket => {
 
                 if (!room || !room.meeting.active) return;
                 if (room.finished) return;
-                if (!room.alive[uuid]) return;
+                if (room.alive[uuid] !== true) return;
 
                 const target = String(content.target || "");
 
                 if (!target) return;
 
+                // Permite votar em jogadores ou bots vivos.
                 if (
                     target !== "skip" &&
-                    (
-                        !room.players[target] ||
-                        room.alive[target] !== true
-                    )
+                    room.alive[target] !== true
                 ) {
                     return;
                 }
 
-                // Não votar duas vezes.
                 if (
                     Object.prototype.hasOwnProperty.call(
                         room.meeting.votes,
@@ -1181,11 +1414,16 @@ wss.on("connection", socket => {
 
         if (Object.keys(room.players).length === 0) {
             rooms.delete(code);
+
             console.log("Sala removida:", code);
+
             return;
         }
 
-        // Trocar host.
+        // =====================================
+        // TRANSFERIR HOST
+        // =====================================
+
         if (room.host === uuid) {
             room.host = Object.keys(room.players)[0];
 
