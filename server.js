@@ -1161,57 +1161,125 @@ wss.on("connection", socket => {
             // ELIMINAR JOGADOR
             // =====================================
 
-            case "kill": {
-                const room = rooms.get(socket.roomId);
+            
+case "kill": {
+    const room = rooms.get(socket.roomId);
 
-                if (!room || !room.started || room.finished) return;
-                if (room.meeting.active) return;
+    if (!room) {
+        console.log("[KILL] Sala não encontrada");
+        return;
+    }
 
-                const target = String(content.uuid || "");
+    if (!room.started || room.finished) {
+        console.log("[KILL] Partida não está ativa");
+        return;
+    }
 
-                if (room.roles[uuid] !== "impostor") return;
-                if (room.alive[uuid] !== true) return;
-                if (room.ventStates[uuid] !== null) return;
+    if (room.meeting.active) {
+        console.log("[KILL] Reunião ativa");
+        return;
+    }
 
-                if (target === uuid) return;
-                if (!room.players[target]) return;
-                if (room.roles[target] !== "crewmate") return;
-                if (room.alive[target] !== true) return;
-                if (room.ventStates[target] !== null) return;
+    const target = String(content.uuid || "");
 
-                const killer = playerlist.get(uuid);
-                const victim = playerlist.get(target);
+    console.log("================================");
+    console.log("TENTATIVA DE ELIMINAÇÃO");
+    console.log("IMPOSTOR:", uuid);
+    console.log("ALVO:", target);
+    console.log("PAPEL:", room.roles[uuid]);
+    console.log("VIVO:", room.alive[uuid]);
 
-                if (!killer || !victim) return;
+    if (room.roles[uuid] !== "impostor") {
+        console.log("[KILL] REJEITADO: jogador não é impostor");
+        return;
+    }
 
-                const distance = Math.hypot(
-                    killer.x - victim.x,
-                    killer.y - victim.y
-                );
+    if (room.alive[uuid] !== true) {
+        console.log("[KILL] REJEITADO: impostor está morto");
+        return;
+    }
 
-                if (distance > KILL_DISTANCE) return;
+    if (room.ventStates[uuid] != null) {
+        console.log("[KILL] REJEITADO: impostor está no duto");
+        return;
+    }
 
-                room.alive[target] = false;
+    if (target === uuid) {
+        console.log("[KILL] REJEITADO: alvo é o próprio impostor");
+        return;
+    }
 
-                room.bodies[target] = {
-                    uuid: target,
-                    x: victim.x,
-                    y: victim.y
-                };
+    if (!room.players[target]) {
+        console.log("[KILL] REJEITADO: alvo não está na sala");
+        return;
+    }
 
-                console.log("Jogador eliminado:", target);
+    if (room.roles[target] !== "crewmate") {
+        console.log("[KILL] REJEITADO: alvo não é crewmate");
+        return;
+    }
 
-                sendToRoom(room, {
-                    cmd: "player_killed",
-                    content: {
-                        uuid: target,
-                        body: room.bodies[target]
-                    }
-                });
+    if (room.alive[target] !== true) {
+        console.log("[KILL] REJEITADO: alvo já está eliminado");
+        return;
+    }
 
-                verificarVitoria(room);
-                break;
-            }
+    if (room.ventStates[target] != null) {
+        console.log("[KILL] REJEITADO: alvo está no duto");
+        return;
+    }
+
+    const killer = playerlist.get(uuid);
+    const victim = playerlist.get(target);
+
+    if (!killer || !victim) {
+        console.log("[KILL] REJEITADO: posição não encontrada");
+        return;
+    }
+
+    const distance = Math.hypot(
+        killer.x - victim.x,
+        killer.y - victim.y
+    );
+
+    console.log("POSIÇÃO IMPOSTOR:", killer.x, killer.y);
+    console.log("POSIÇÃO ALVO:", victim.x, victim.y);
+    console.log("DISTÂNCIA:", distance);
+    console.log("DISTÂNCIA MÁXIMA:", KILL_DISTANCE);
+
+    if (distance > KILL_DISTANCE) {
+        console.log("[KILL] REJEITADO: muito longe");
+        console.log("================================");
+        return;
+    }
+
+    // Eliminação confirmada.
+    room.alive[target] = false;
+
+    room.bodies[target] = {
+        uuid: target,
+        x: victim.x,
+        y: victim.y
+    };
+
+    console.log("[KILL] ELIMINAÇÃO CONFIRMADA!");
+    console.log("VÍTIMA:", target);
+    console.log("================================");
+
+    sendToRoom(room, {
+        cmd: "player_killed",
+        content: {
+            uuid: target,
+            killer_id: uuid,
+            body: room.bodies[target]
+        }
+    });
+
+    verificarVitoria(room);
+
+    break;
+}
+
 
             // =====================================
             // REPORTAR CORPO
