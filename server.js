@@ -15,6 +15,7 @@ const rooms = new Map();
 
 const REPORT_DISTANCE = 70;
 const KILL_DISTANCE = 70;
+const MEETING_DURATION = 60;
 
 // =====================================
 // CÓDIGO DA SALA
@@ -164,6 +165,19 @@ function obterParticipantes(room) {
 }
 
 // =====================================
+// NOME DO PARTICIPANTE
+// =====================================
+
+function obterNome(room, id) {
+	if (room.bots[id]) {
+		return room.bots[id].username || "Bot";
+	}
+
+	const player = playerlist.get(id);
+	return player ? player.username : "Jogador";
+}
+
+// =====================================
 // CRIAR CORPO
 // =====================================
 
@@ -172,8 +186,8 @@ function criarCorpo(room, target, x, y) {
 
 	const body = {
 		uuid: target,
-		x,
-		y
+		x: Number(x),
+		y: Number(y)
 	};
 
 	room.bodies[target] = body;
@@ -185,7 +199,7 @@ function criarCorpo(room, target, x, y) {
 		}
 	});
 
-	console.log("CORPO CRIADO:", target, x, y);
+	console.log("CORPO CRIADO:", target, body.x, body.y);
 
 	return body;
 }
@@ -239,12 +253,17 @@ function atualizarControladorSeNecessario(room, saiuUUID) {
 // =====================================
 
 function resetMeeting(room) {
+	if (room.meeting && room.meeting.timer) {
+		clearTimeout(room.meeting.timer);
+	}
+
 	room.meeting = {
 		active: false,
 		reporter: null,
 		reason: null,
 		votes: {},
-		startedAt: null
+		startedAt: null,
+		timer: null
 	};
 }
 
@@ -253,17 +272,22 @@ function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
 	if (room.meeting.active) return false;
 	if (room.alive[reporter] !== true) return false;
 
+	if (bodyUUID && !room.bodies[bodyUUID]) {
+		return false;
+	}
+
+	if (bodyUUID) {
+		delete room.bodies[bodyUUID];
+	}
+
 	room.meeting = {
 		active: true,
 		reporter,
 		reason,
 		votes: {},
-		startedAt: Date.now()
+		startedAt: Date.now(),
+		timer: null
 	};
-
-	if (bodyUUID) {
-		delete room.bodies[bodyUUID];
-	}
 
 	console.log("REUNIÃO INICIADA:", reason, reporter);
 
@@ -272,12 +296,20 @@ function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
 		content: {
 			reason,
 			reporter,
-			reporter_name: playerlist.get(reporter)?.username || "Jogador",
+			reporter_name: obterNome(room, reporter),
 			body_uuid: bodyUUID,
-			duration: 60,
+			duration: MEETING_DURATION,
 			players: obterParticipantes(room)
 		}
 	});
+
+	// Finaliza a votação quando o tempo acabar.
+	room.meeting.timer = setTimeout(() => {
+		if (room.meeting.active) {
+			console.log("TEMPO DA REUNIÃO ESGOTADO!");
+			finalizarReuniao(room);
+		}
+	}, MEETING_DURATION * 1000);
 
 	return true;
 }
@@ -290,11 +322,18 @@ function finalizarPartida(room, winner) {
 	if (!room || room.finished) return;
 
 	room.finished = true;
+
+	if (room.meeting && room.meeting.timer) {
+		clearTimeout(room.meeting.timer);
+	}
+
 	room.meeting.active = false;
 
 	sendToRoom(room, {
 		cmd: "game_over",
-		content: { winner }
+		content: {
+			winner
+		}
 	});
 
 	console.log("PARTIDA FINALIZADA:", winner);
@@ -336,9 +375,14 @@ function verificarVitoria(room) {
 function finalizarReuniao(room) {
 	if (!room || !room.meeting.active) return;
 
+	if (room.meeting.timer) {
+		clearTimeout(room.meeting.timer);
+	}
+
+	const votes = room.meeting.votes;
 	const counts = {};
 
-	for (const vote of Object.values(room.meeting.votes)) {
+	for (const vote of Object.values(votes)) {
 		counts[vote] = (counts[vote] || 0) + 1;
 	}
 
@@ -350,68 +394,84 @@ function finalizarReuniao(room) {
 	);
 
 	let ejected = null;
-	let tie = false;
-	let ejectedBot = false;
 	let ejectedName = "";
+	let ejectedBot = false;
+	let ejectedRole = "";
+	let tie = false;
 
+	// Só elimina quando existe um vencedor único
+	// e ele não é o Skip.
 	if (winners.length === 1 && winners[0] !== "skip") {
 		const target = winners[0];
 
 		if (room.alive[target] === true) {
 			ejected = target;
+			ejectedName = obterNome(room, target);
+			ejectedBot = !!room.bots[target];
+			ejectedRole = room.roles[target] || "";
+
 			room.alive[target] = false;
 
 			if (room.ventStates[target] !== undefined) {
 				room.ventStates[target] = null;
 			}
 
-			if (room.bots[target]) {
-				ejectedBot = true;
-				ejectedName = room.bots[target].username || "Bot";
+			if (ejectedBot) {
 				room.botAlive[target] = false;
-			} else {
-				const player = playerlist.get(target);
-				ejectedName = player ? player.username : "Jogador";
 			}
 		}
 	} else if (winners.length > 1) {
 		tie = true;
 	}
 
+	// Informações de cada opção votada.
 	const voteDetails = {};
 
 	for (const target in counts) {
-		let name = target;
-
-		if (target === "skip") {
-			name = "SKIP";
-		} else if (room.bots[target]) {
-			name = room.bots[target].username || "Bot";
-		} else {
-			const player = playerlist.get(target);
-			name = player ? player.username : "Jogador";
-		}
-
 		voteDetails[target] = {
 			count: counts[target],
-			username: name
+			username: target === "skip"
+				? "SKIP"
+				: obterNome(room, target)
 		};
 	}
 
+	const votesCast = Object.keys(votes).length;
+
+	const totalVoters = Object.keys(room.players).filter(
+		id => room.alive[id] === true || id === ejected
+	).length;
+
 	room.meeting.active = false;
 
+	// Envia o resultado para todos antes de remover o bot.
 	sendToRoom(room, {
 		cmd: "meeting_result",
 		content: {
 			ejected,
 			ejected_name: ejectedName,
+			ejected_is_bot: ejectedBot,
+			ejected_role: ejectedRole,
 			tie,
+			skip: winners.length === 1 && winners[0] === "skip",
 			votes: counts,
-			vote_details: voteDetails
+			vote_details: voteDetails,
+			votes_cast: votesCast,
+			total_voters: totalVoters
 		}
 	});
 
-	if (ejectedBot) {
+	console.log("================================");
+	console.log("REUNIÃO FINALIZADA");
+	console.log("VOTOS:", counts);
+	console.log("ELIMINADO:", ejectedName || "Ninguém");
+	console.log("É BOT:", ejectedBot);
+	console.log("EMPATE:", tie);
+	console.log("================================");
+
+	// Se o eliminado era bot, todos os clientes
+	// recebem o pedido para executar queue_free().
+	if (ejected && ejectedBot) {
 		sendToRoom(room, {
 			cmd: "remove_network_bot",
 			content: {
@@ -423,6 +483,7 @@ function finalizarReuniao(room) {
 	}
 
 	resetMeeting(room);
+
 	verificarVitoria(room);
 }
 
@@ -433,12 +494,15 @@ function finalizarReuniao(room) {
 function verificarVotos(room) {
 	if (!room || !room.meeting.active) return;
 
-	// Somente jogadores humanos vivos precisam votar.
+	// Apenas humanos vivos precisam votar.
 	const vivos = Object.keys(room.players).filter(
 		id => room.alive[id] === true
 	);
 
-	if (vivos.length === 0) return;
+	if (vivos.length === 0) {
+		finalizarReuniao(room);
+		return;
+	}
 
 	const todosVotaram = vivos.every(id =>
 		Object.prototype.hasOwnProperty.call(room.meeting.votes, id)
@@ -482,7 +546,7 @@ function removerJogadorDaSala(socket, uuid) {
 			if (remaining.length > 0) {
 				room.host = remaining[0];
 
-				sendToPlayer(room, room.host, {
+				sendToRoom(room, {
 					cmd: "host_changed",
 					content: {
 						uuid: room.host
@@ -494,6 +558,10 @@ function removerJogadorDaSala(socket, uuid) {
 		atualizarControladorSeNecessario(room, uuid);
 
 		if (Object.keys(room.players).length === 0) {
+			if (room.meeting && room.meeting.timer) {
+				clearTimeout(room.meeting.timer);
+			}
+
 			rooms.delete(code);
 			console.log("Sala removida:", code);
 		} else {
@@ -598,7 +666,8 @@ wss.on("connection", socket => {
 						reporter: null,
 						reason: null,
 						votes: {},
-						startedAt: null
+						startedAt: null,
+						timer: null
 					},
 
 					bots: {},
@@ -1391,10 +1460,15 @@ wss.on("connection", socket => {
 				if (room.alive[uuid] !== true) return;
 
 				const target = String(content.target || "");
+
 				if (!target) return;
 
-				if (target !== "skip" && room.alive[target] !== true) return;
+				// Só aceita Skip ou participante vivo.
+				if (target !== "skip" && room.alive[target] !== true) {
+					return;
+				}
 
+				// Não permite votar duas vezes.
 				if (
 					Object.prototype.hasOwnProperty.call(
 						room.meeting.votes,
@@ -1408,14 +1482,23 @@ wss.on("connection", socket => {
 					id => room.alive[id] === true
 				);
 
+				const votesCast = Object.keys(room.meeting.votes).length;
+
 				sendToRoom(room, {
 					cmd: "vote_received",
 					content: {
 						uuid,
-						total_votes: Object.keys(room.meeting.votes).length,
+						total_votes: votesCast,
 						total_alive: vivos.length
 					}
 				});
+
+				console.log(
+					"VOTO RECEBIDO:",
+					obterNome(room, uuid),
+					"->",
+					target === "skip" ? "SKIP" : obterNome(room, target)
+				);
 
 				verificarVotos(room);
 				break;
