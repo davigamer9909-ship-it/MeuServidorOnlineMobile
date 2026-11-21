@@ -1078,103 +1078,109 @@ wss.on("connection", socket => {
             // HUMANO IMPOSTOR - ELIMINAR BOT
             // =====================================
 
-            case "kill_bot": {
-                const room = rooms.get(socket.roomId);
+            
+case "kill_bot": {
+    const room = rooms.get(socket.roomId);
 
-                console.log("================================");
-                console.log("[KILL BOT] PEDIDO RECEBIDO");
-                console.log("JOGADOR:", uuid);
-                console.log("CONTEÚDO:", content);
+    console.log("================================");
+    console.log("[KILL BOT] PEDIDO RECEBIDO");
+    console.log("JOGADOR:", uuid);
+    console.log("CONTEÚDO:", content);
 
-                if (!room || !room.started || room.finished) {
-                    console.log("[KILL BOT] Sala inválida ou partida encerrada");
-                    break;
-                }
+    if (!room || !room.started || room.finished) {
+        console.log("[KILL BOT] Sala inválida ou partida encerrada");
+        break;
+    }
 
-                if (room.meeting.active) {
-                    console.log("[KILL BOT] Reunião ativa");
-                    break;
-                }
+    if (room.meeting.active) {
+        console.log("[KILL BOT] Reunião ativa");
+        break;
+    }
 
-                const botId = String(content.bot_id || "");
+    const botId = String(content.bot_id || "");
 
-                if (room.roles[uuid] !== "impostor") {
-                    console.log("[KILL BOT] Jogador não é impostor");
-                    break;
-                }
+    if (room.roles[uuid] !== "impostor") {
+        console.log("[KILL BOT] Jogador não é impostor");
+        break;
+    }
 
-                if (room.alive[uuid] !== true) {
-                    console.log("[KILL BOT] Impostor está morto");
-                    break;
-                }
+    if (room.alive[uuid] !== true) {
+        console.log("[KILL BOT] Impostor está morto");
+        break;
+    }
 
-                if (room.ventStates[uuid] != null) {
-                    console.log("[KILL BOT] Impostor está no duto");
-                    break;
-                }
+    if (room.ventStates[uuid] != null) {
+        console.log("[KILL BOT] Impostor está no duto");
+        break;
+    }
 
-                if (!room.bots[botId]) {
-                    console.log("[KILL BOT] Bot não encontrado:", botId);
-                    break;
-                }
+    const bot = room.bots[botId];
 
-                if (room.roles[botId] !== "crewmate") {
-                    console.log("[KILL BOT] Bot não é crewmate");
-                    break;
-                }
+    if (!bot) {
+        console.log("[KILL BOT] Bot não encontrado:", botId);
+        break;
+    }
 
-                if (room.alive[botId] !== true) {
-                    console.log("[KILL BOT] Bot já está eliminado");
-                    break;
-                }
+    if (room.roles[botId] !== "crewmate") {
+        console.log("[KILL BOT] Bot não é crewmate");
+        break;
+    }
 
-                const killer = playerlist.get(uuid);
-                const bot = room.bots[botId];
+    if (room.alive[botId] !== true) {
+        console.log("[KILL BOT] Bot já está morto");
+        break;
+    }
 
-                if (!killer || !bot) {
-                    console.log("[KILL BOT] Posição não encontrada");
-                    break;
-                }
+    const killer = playerlist.get(uuid);
 
-                const distance = Math.hypot(
-                    killer.x - bot.x,
-                    killer.y - bot.y
-                );
+    if (!killer) {
+        console.log("[KILL BOT] Jogador não encontrado");
+        break;
+    }
 
-                console.log("POSIÇÃO IMPOSTOR:", killer.x, killer.y);
-                console.log("POSIÇÃO BOT:", bot.x, bot.y);
-                console.log("DISTÂNCIA:", distance);
-                console.log("DISTÂNCIA MÁXIMA:", KILL_DISTANCE);
+    const distance = Math.hypot(
+        killer.x - bot.x,
+        killer.y - bot.y
+    );
 
-                if (distance > KILL_DISTANCE) {
-                    console.log("[KILL BOT] Bot está muito longe");
-                    break;
-                }
+    console.log("[KILL BOT] DISTÂNCIA:", distance);
 
-                room.alive[botId] = false;
-                room.botAlive[botId] = false;
+    if (distance > KILL_DISTANCE) {
+        console.log("[KILL BOT] Bot está muito longe");
+        break;
+    }
 
-                room.bodies[botId] = {
-                    uuid: botId,
-                    x: bot.x,
-                    y: bot.y
-                };
+    // MARCAR BOT COMO MORTO
+    room.alive[botId] = false;
+    room.botAlive[botId] = false;
 
-                console.log("[KILL BOT] BOT ELIMINADO!");
-                console.log("NOME:", bot.username);
+    // SALVAR CORPO
+    room.bodies[botId] = {
+        uuid: botId,
+        x: bot.x,
+        y: bot.y
+    };
 
-                sendToRoom(room, {
-                    cmd: "remove_network_bot",
-                    content: {
-                        bot_id: botId
-                    }
-                });
+    console.log("[KILL BOT] ELIMINAÇÃO CONFIRMADA:", botId);
 
-                delete room.bots[botId];
+    // AVISAR TODOS OS JOGADORES
+    sendToRoom(room, {
+        cmd: "remove_network_bot",
+        content: {
+            bot_id: botId
+        }
+    });
 
-                verificarVitoria(room);
-                break;
-            }
+    // REMOVER DOS BOTS ATIVOS
+    delete room.bots[botId];
+
+    console.log("[KILL BOT] BOT REMOVIDO DO SERVIDOR:", botId);
+
+    verificarVitoria(room);
+
+    break;
+}
+
 
             // =====================================
             // HUMANO IMPOSTOR - ELIMINAR HUMANO
