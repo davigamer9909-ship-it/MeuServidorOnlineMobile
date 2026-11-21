@@ -212,6 +212,7 @@ function finalizarPartida(room, winner) {
 function verificarVitoria(room) {
     if (!room || room.finished || !room.started) return;
 
+    // room.alive já contém humanos e bots.
     const vivos = Object.keys(room.alive).filter(
         id => room.alive[id] === true
     );
@@ -224,23 +225,29 @@ function verificarVitoria(room) {
         id => room.roles[id] === "crewmate"
     );
 
+    console.log("================================");
+    console.log("VERIFICANDO VITÓRIA");
     console.log("Participantes vivos:", vivos.length);
     console.log("Impostores vivos:", impostores.length);
     console.log("Crewmates vivos:", crewmates.length);
+    console.log("================================");
 
     if (impostores.length === 0) {
         finalizarPartida(room, "crewmates");
         return;
     }
 
-    if (
-        crewmates.length === 0 ||
-        impostores.length >= crewmates.length
-    ) {
+    // O impostor vence quando restarem 2 crewmates ou menos.
+    if (crewmates.length <= 2) {
+        finalizarPartida(room, "impostor");
+        return;
+    }
+
+    // Mantém também a regra de vantagem numérica.
+    if (impostores.length >= crewmates.length) {
         finalizarPartida(room, "impostor");
     }
 }
-
 // =====================================
 // INICIAR REUNIÃO
 // =====================================
@@ -922,86 +929,105 @@ wss.on("connection", socket => {
             // BOT - ELIMINAR HUMANO OU BOT
             // =====================================
 
-            case "bot_kill": {
-                const room = rooms.get(socket.roomId);
+            // =====================================
+// BOT - ELIMINAR HUMANO OU BOT
+// =====================================
 
-                if (!room || !room.started || room.finished) return;
-                if (uuid !== room.botController) return;
-                if (room.meeting.active) return;
+case "bot_kill": {
+    const room = rooms.get(socket.roomId);
 
-                const botId = String(content.bot_id || "");
-                const target = String(content.target || "");
+    if (!room || !room.started || room.finished) return;
+    if (uuid !== room.botController) return;
+    if (room.meeting.active) return;
 
-                if (!room.bots[botId]) return;
-                if (room.roles[botId] !== "impostor") return;
-                if (room.alive[botId] !== true) return;
+    const botId = String(content.bot_id || "");
+    const target = String(content.target || "");
 
-                if (!target || target === botId) return;
+    if (!room.bots[botId]) return;
+    if (room.roles[botId] !== "impostor") return;
+    if (room.alive[botId] !== true) return;
 
-                const isHuman = !!room.players[target];
-                const isBot = !!room.bots[target];
+    if (!target || target === botId) return;
 
-                if (!isHuman && !isBot) return;
+    const isHuman = !!room.players[target];
+    const isBot = !!room.bots[target];
 
-                if (room.roles[target] !== "crewmate") return;
-                if (room.alive[target] !== true) return;
+    if (!isHuman && !isBot) return;
 
-                let victimX;
-                let victimY;
+    if (room.roles[target] !== "crewmate") return;
+    if (room.alive[target] !== true) return;
 
-                if (isHuman) {
-                    const victim = playerlist.get(target);
-                    if (!victim) return;
+    let victimX;
+    let victimY;
+    let victimName = target;
 
-                    victimX = victim.x;
-                    victimY = victim.y;
-                } else {
-                    victimX = room.bots[target].x;
-                    victimY = room.bots[target].y;
-                }
+    if (isHuman) {
+        const victim = playerlist.get(target);
+        if (!victim) return;
 
-                const bot = room.bots[botId];
+        victimX = victim.x;
+        victimY = victim.y;
+    } else {
+        const victim = room.bots[target];
+        victimX = victim.x;
+        victimY = victim.y;
+        victimName = victim.username;
+    }
 
-                const distance = Math.hypot(
-                    bot.x - victimX,
-                    bot.y - victimY
-                );
+    const bot = room.bots[botId];
 
-                if (distance > KILL_DISTANCE) return;
+    const distance = Math.hypot(
+        bot.x - victimX,
+        bot.y - victimY
+    );
 
-                room.alive[target] = false;
+    if (distance > KILL_DISTANCE) return;
 
-                if (isBot) {
-                    room.botAlive[target] = false;
-                }
+    // Eliminação confirmada.
+    room.alive[target] = false;
 
-                room.bodies[target] = {
-                    uuid: target,
-                    x: victimX,
-                    y: victimY
-                };
+    if (isBot) {
+        room.botAlive[target] = false;
+    }
 
-                console.log("================================");
-                console.log("BOT IMPOSTOR ELIMINOU!");
-                console.log("IMPOSTOR:", bot.username);
-                console.log("VÍTIMA:", isHuman ? target : room.bots[target].username);
-                console.log("TIPO:", isHuman ? "HUMANO" : "BOT");
-                console.log("DISTÂNCIA:", distance);
-                console.log("================================");
+    room.bodies[target] = {
+        uuid: target,
+        x: victimX,
+        y: victimY
+    };
 
-                sendToRoom(room, {
-                    cmd: "player_killed",
-                    content: {
-                        uuid: target,
-                        killer_id: botId,
-                        body: room.bodies[target]
-                    }
-                });
+    console.log("================================");
+    console.log("BOT IMPOSTOR ELIMINOU!");
+    console.log("IMPOSTOR:", bot.username);
+    console.log("VÍTIMA:", victimName);
+    console.log("TIPO:", isHuman ? "HUMANO" : "BOT");
+    console.log("DISTÂNCIA:", distance);
+    console.log("================================");
 
-                verificarVitoria(room);
-                break;
+    if (isHuman) {
+        sendToRoom(room, {
+            cmd: "player_killed",
+            content: {
+                uuid: target,
+                killer_id: botId,
+                body: room.bodies[target]
             }
+        });
+    } else {
+        sendToRoom(room, {
+            cmd: "remove_network_bot",
+            content: {
+                bot_id: target
+            }
+        });
 
+        delete room.bots[target];
+    }
+
+    verificarVitoria(room);
+
+    break;
+}
             // =====================================
             // REMOVER BOT
             // =====================================
@@ -1162,124 +1188,109 @@ wss.on("connection", socket => {
             // =====================================
 
             
-case "kill": {
+// =====================================
+// HUMANO IMPOSTOR - ELIMINAR BOT
+// =====================================
+
+case "kill_bot": {
     const room = rooms.get(socket.roomId);
 
-    if (!room) {
-        console.log("[KILL] Sala não encontrada");
-        return;
-    }
+    if (!room || !room.started || room.finished) return;
+    if (room.meeting.active) return;
 
-    if (!room.started || room.finished) {
-        console.log("[KILL] Partida não está ativa");
-        return;
-    }
-
-    if (room.meeting.active) {
-        console.log("[KILL] Reunião ativa");
-        return;
-    }
-
-    const target = String(content.uuid || "");
+    const botId = String(content.bot_id || "");
 
     console.log("================================");
-    console.log("TENTATIVA DE ELIMINAÇÃO");
+    console.log("HUMANO TENTANDO ELIMINAR BOT");
     console.log("IMPOSTOR:", uuid);
-    console.log("ALVO:", target);
-    console.log("PAPEL:", room.roles[uuid]);
-    console.log("VIVO:", room.alive[uuid]);
+    console.log("BOT:", botId);
 
+    // Verificar impostor humano.
     if (room.roles[uuid] !== "impostor") {
-        console.log("[KILL] REJEITADO: jogador não é impostor");
+        console.log("[KILL BOT] Jogador não é impostor");
         return;
     }
 
     if (room.alive[uuid] !== true) {
-        console.log("[KILL] REJEITADO: impostor está morto");
+        console.log("[KILL BOT] Impostor está morto");
         return;
     }
 
     if (room.ventStates[uuid] != null) {
-        console.log("[KILL] REJEITADO: impostor está no duto");
+        console.log("[KILL BOT] Impostor está no duto");
         return;
     }
 
-    if (target === uuid) {
-        console.log("[KILL] REJEITADO: alvo é o próprio impostor");
+    // Verificar se o bot existe.
+    if (!room.bots[botId]) {
+        console.log("[KILL BOT] Bot não encontrado");
         return;
     }
 
-    if (!room.players[target]) {
-        console.log("[KILL] REJEITADO: alvo não está na sala");
+    if (room.roles[botId] !== "crewmate") {
+        console.log("[KILL BOT] Bot não é crewmate");
         return;
     }
 
-    if (room.roles[target] !== "crewmate") {
-        console.log("[KILL] REJEITADO: alvo não é crewmate");
+    if (room.alive[botId] !== true) {
+        console.log("[KILL BOT] Bot já está eliminado");
         return;
     }
 
-    if (room.alive[target] !== true) {
-        console.log("[KILL] REJEITADO: alvo já está eliminado");
-        return;
-    }
-
-    if (room.ventStates[target] != null) {
-        console.log("[KILL] REJEITADO: alvo está no duto");
-        return;
-    }
-
+    // Pegar posições.
     const killer = playerlist.get(uuid);
-    const victim = playerlist.get(target);
+    const bot = room.bots[botId];
 
-    if (!killer || !victim) {
-        console.log("[KILL] REJEITADO: posição não encontrada");
+    if (!killer || !bot) {
+        console.log("[KILL BOT] Posição não encontrada");
         return;
     }
 
+    // Verificar distância.
     const distance = Math.hypot(
-        killer.x - victim.x,
-        killer.y - victim.y
+        killer.x - bot.x,
+        killer.y - bot.y
     );
 
     console.log("POSIÇÃO IMPOSTOR:", killer.x, killer.y);
-    console.log("POSIÇÃO ALVO:", victim.x, victim.y);
+    console.log("POSIÇÃO BOT:", bot.x, bot.y);
     console.log("DISTÂNCIA:", distance);
-    console.log("DISTÂNCIA MÁXIMA:", KILL_DISTANCE);
 
     if (distance > KILL_DISTANCE) {
-        console.log("[KILL] REJEITADO: muito longe");
-        console.log("================================");
+        console.log("[KILL BOT] Bot está muito longe");
         return;
     }
 
     // Eliminação confirmada.
-    room.alive[target] = false;
+    room.alive[botId] = false;
+    room.botAlive[botId] = false;
 
-    room.bodies[target] = {
-        uuid: target,
-        x: victim.x,
-        y: victim.y
+    room.bodies[botId] = {
+        uuid: botId,
+        x: bot.x,
+        y: bot.y
     };
 
-    console.log("[KILL] ELIMINAÇÃO CONFIRMADA!");
-    console.log("VÍTIMA:", target);
+    console.log("[KILL BOT] BOT ELIMINADO!");
+    console.log("NOME:", bot.username);
     console.log("================================");
 
+    // Remover o bot visualmente de todos os jogadores.
     sendToRoom(room, {
-        cmd: "player_killed",
+        cmd: "remove_network_bot",
         content: {
-            uuid: target,
-            killer_id: uuid,
-            body: room.bodies[target]
+            bot_id: botId
         }
     });
 
+    // Tirar o bot da lista de bots ativos.
+    delete room.bots[botId];
+
+    // Verificar vitória.
     verificarVitoria(room);
 
     break;
 }
-
 
             // =====================================
             // REPORTAR CORPO
