@@ -1321,7 +1321,7 @@ case "bot_report_body": {
 					room.botAlive[target] = false;
 				}
 
-				const body = criarCorpo(room, target, victimX, victimY);
+				const body = criarCorpo(room, target, victimX, victimY, botId);
 
 				if (isHuman) {
 					sendToRoom(room, {
