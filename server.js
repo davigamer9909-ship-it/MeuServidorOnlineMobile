@@ -123,6 +123,31 @@ function sendToRoomExcept(room, excludedSocket, message) {
 }
 
 // =====================================
+// CRIAR CORPO
+// =====================================
+
+function criarCorpo(room, target, x, y) {
+    if (!room || room.bodies[target]) return;
+
+    const body = {
+        uuid: target,
+        x,
+        y
+    };
+
+    room.bodies[target] = body;
+
+    sendToRoom(room, {
+        cmd: "body_spawned",
+        content: {
+            body
+        }
+    });
+
+    console.log("CORPO CRIADO:", target, x, y);
+}
+
+// =====================================
 // CONTROLADOR DOS BOTS
 // =====================================
 
@@ -144,9 +169,7 @@ function escolherControlador(room) {
     room.botController =
         conectados.find(id => id !== room.host) || conectados[0];
 
-    console.log("================================");
     console.log("NOVO CONTROLADOR DOS BOTS:", room.botController);
-    console.log("================================");
 
     sendToRoom(room, {
         cmd: "bot_controller_changed",
@@ -195,11 +218,11 @@ function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
         startedAt: Date.now()
     };
 
-    console.log("================================");
-    console.log("REUNIÃO INICIADA");
-    console.log("MOTIVO:", reason);
-    console.log("RESPONSÁVEL:", reporter);
-    console.log("================================");
+    console.log("REUNIÃO INICIADA:", reason, reporter);
+
+    if (bodyUUID) {
+        delete room.bodies[bodyUUID];
+    }
 
     sendToRoom(room, {
         cmd: "meeting_started",
@@ -224,15 +247,12 @@ function finalizarPartida(room, winner) {
     room.finished = true;
     room.meeting.active = false;
 
-    console.log("================================");
-    console.log("PARTIDA FINALIZADA!");
-    console.log("VENCEDORES:", winner);
-    console.log("================================");
-
     sendToRoom(room, {
         cmd: "game_over",
         content: { winner }
     });
+
+    console.log("PARTIDA FINALIZADA:", winner);
 }
 
 // =====================================
@@ -254,20 +274,8 @@ function verificarVitoria(room) {
         id => room.roles[id] === "crewmate"
     );
 
-    console.log("================================");
-    console.log("VERIFICANDO VITÓRIA");
-    console.log("PARTICIPANTES VIVOS:", vivos.length);
-    console.log("IMPOSTORES:", impostores.length);
-    console.log("CREWMATES:", crewmates.length);
-    console.log("================================");
-
     if (impostores.length === 0) {
         finalizarPartida(room, "crewmates");
-        return;
-    }
-
-    if (crewmates.length <= 2) {
-        finalizarPartida(room, "impostor");
         return;
     }
 
@@ -320,13 +328,6 @@ function finalizarReuniao(room) {
         tie = true;
     }
 
-    console.log("================================");
-    console.log("RESULTADO DA VOTAÇÃO");
-    console.log("VOTOS:", counts);
-    console.log("EXPULSO:", ejected);
-    console.log("EMPATE:", tie);
-    console.log("================================");
-
     room.meeting.active = false;
 
     sendToRoom(room, {
@@ -349,8 +350,7 @@ function finalizarReuniao(room) {
         delete room.bots[ejected];
     }
 
-    room.bodies = {};
-
+    // Corpos permanecem no mapa, exceto os já reportados.
     resetMeeting(room);
     verificarVitoria(room);
 }
@@ -362,7 +362,7 @@ function finalizarReuniao(room) {
 function verificarVotos(room) {
     if (!room || !room.meeting.active) return;
 
-    const vivos = Object.keys(room.players).filter(
+    const vivos = Object.keys(room.alive).filter(
         id => room.alive[id] === true
     );
 
@@ -392,7 +392,6 @@ function removerJogadorDaSala(socket, uuid) {
         delete room.alive[uuid];
         delete room.roles[uuid];
         delete room.ventStates[uuid];
-        delete room.bodies[uuid];
 
         if (room.meeting.active) {
             delete room.meeting.votes[uuid];
@@ -474,15 +473,10 @@ wss.on("connection", socket => {
 
         switch (data.cmd) {
 
-            // =====================================
-            // SAIR DA SALA
-            // =====================================
-
             case "leave_room": {
                 if (!socket.roomId) return;
 
                 const code = socket.roomId;
-
                 removerJogadorDaSala(socket, uuid);
 
                 socket.send(JSON.stringify({
@@ -493,10 +487,6 @@ wss.on("connection", socket => {
                 console.log("Jogador saiu:", uuid, code);
                 break;
             }
-
-            // =====================================
-            // CRIAR SALA
-            // =====================================
 
             case "create_room": {
                 if (socket.roomId) return;
@@ -561,10 +551,6 @@ wss.on("connection", socket => {
                 console.log("Sala criada:", code);
                 break;
             }
-
-            // =====================================
-            // ENTRAR NA SALA
-            // =====================================
 
             case "join_room": {
                 if (socket.roomId) return;
@@ -640,10 +626,6 @@ wss.on("connection", socket => {
                 break;
             }
 
-            // =====================================
-            // INICIAR PARTIDA
-            // =====================================
-
             case "start_game": {
                 const room = rooms.get(socket.roomId);
 
@@ -697,14 +679,8 @@ wss.on("connection", socket => {
                 }));
 
                 console.log("Sorteio solicitado!");
-                console.log("Jogadores:", players.length);
-                console.log("Bots:", bots.length);
                 break;
             }
-
-            // =====================================
-            // RECEBER FUNÇÕES
-            // =====================================
 
             case "assign_roles": {
                 const room = rooms.get(socket.roomId);
@@ -795,11 +771,7 @@ wss.on("connection", socket => {
                 room.started = true;
                 room.starting = false;
 
-                console.log("================================");
-                console.log("PARTIDA INICIADA");
-                console.log("IMPOSTOR:", impostors[0]);
-                console.log("CONTROLADOR:", room.botController);
-                console.log("================================");
+                console.log("PARTIDA INICIADA. IMPOSTOR:", impostors[0]);
 
                 for (const id of players) {
                     const client = room.players[id];
@@ -831,10 +803,6 @@ wss.on("connection", socket => {
                 break;
             }
 
-            // =====================================
-            // POSIÇÃO DOS JOGADORES
-            // =====================================
-
             case "position": {
                 const room = rooms.get(socket.roomId);
 
@@ -862,10 +830,6 @@ wss.on("connection", socket => {
                 break;
             }
 
-            // =====================================
-            // BOT - POSIÇÃO
-            // =====================================
-
             case "bot_position": {
                 const room = rooms.get(socket.roomId);
 
@@ -888,19 +852,11 @@ wss.on("connection", socket => {
 
                 sendToRoomExcept(room, socket, {
                     cmd: "update_bot_position",
-                    content: {
-                        bot_id: botId,
-                        x,
-                        y
-                    }
+                    content: { bot_id: botId, x, y }
                 });
 
                 break;
             }
-
-            // =====================================
-            // BOT - COMPLETAR TAREFA
-            // =====================================
 
             case "bot_task": {
                 const room = rooms.get(socket.roomId);
@@ -915,31 +871,20 @@ wss.on("connection", socket => {
                 if (!room.bots[botId]) return;
                 if (room.alive[botId] !== true) return;
                 if (room.roles[botId] !== "crewmate") return;
-
                 if (!taskId || taskId.length > 200) return;
                 if (room.completedTasks.has(taskId)) return;
 
                 room.completedTasks.add(taskId);
-
-                room.taskProgress = Math.min(
-                    room.taskProgress + 10,
-                    100
-                );
-
-                console.log("Bot completou tarefa:", botId, taskId);
+                room.taskProgress = Math.min(room.taskProgress + 10, 100);
 
                 sendToRoom(room, {
                     cmd: "task_progress",
-                    content: {
-                        value: room.taskProgress
-                    }
+                    content: { value: room.taskProgress }
                 });
 
                 sendToRoom(room, {
                     cmd: "task_completed",
-                    content: {
-                        task_id: taskId
-                    }
+                    content: { task_id: taskId }
                 });
 
                 if (room.taskProgress >= 100) {
@@ -950,95 +895,43 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // BOT IMPOSTOR - ELIMINAR HUMANO OU BOT
+            // BOT IMPOSTOR - MATAR
             // =====================================
 
             case "bot_kill": {
                 const room = rooms.get(socket.roomId);
 
-                console.log("================================");
-                console.log("[BOT KILL] PEDIDO RECEBIDO");
-                console.log("CONTROLADOR:", uuid);
-                console.log("CONTEÚDO:", content);
-
-                if (!room || !room.started || room.finished) {
-                    console.log("[BOT KILL] Partida inválida");
-                    break;
-                }
-
-                if (uuid !== room.botController) {
-                    console.log("[BOT KILL] Jogador não é controlador dos bots");
-                    break;
-                }
-
-                if (room.meeting.active) {
-                    console.log("[BOT KILL] Reunião ativa");
-                    break;
-                }
+                if (!room || !room.started || room.finished) break;
+                if (uuid !== room.botController) break;
+                if (room.meeting.active) break;
 
                 const botId = String(content.bot_id || "");
                 const target = String(content.target || "");
-
                 const bot = room.bots[botId];
 
-                if (!bot) {
-                    console.log("[BOT KILL] Bot impostor não encontrado:", botId);
-                    break;
-                }
-
-                if (room.roles[botId] !== "impostor") {
-                    console.log("[BOT KILL] Bot não é impostor");
-                    break;
-                }
-
-                if (room.alive[botId] !== true) {
-                    console.log("[BOT KILL] Bot impostor está morto");
-                    break;
-                }
-
-                if (!target || target === botId) {
-                    console.log("[BOT KILL] Alvo inválido");
-                    break;
-                }
+                if (!bot || room.roles[botId] !== "impostor") break;
+                if (room.alive[botId] !== true) break;
+                if (!target || target === botId) break;
 
                 const isHuman = !!room.players[target];
                 const isBot = !!room.bots[target];
 
-                if (!isHuman && !isBot) {
-                    console.log("[BOT KILL] Alvo não encontrado:", target);
-                    break;
-                }
-
-                if (room.roles[target] !== "crewmate") {
-                    console.log("[BOT KILL] Alvo não é crewmate");
-                    break;
-                }
-
-                if (room.alive[target] !== true) {
-                    console.log("[BOT KILL] Alvo já está morto");
-                    break;
-                }
+                if (!isHuman && !isBot) break;
+                if (room.roles[target] !== "crewmate") break;
+                if (room.alive[target] !== true) break;
 
                 let victimX;
                 let victimY;
-                let victimName = target;
 
                 if (isHuman) {
                     const victim = playerlist.get(target);
-
-                    if (!victim) {
-                        console.log("[BOT KILL] Posição do jogador não encontrada");
-                        break;
-                    }
+                    if (!victim) break;
 
                     victimX = victim.x;
                     victimY = victim.y;
                 } else {
-                    const victim = room.bots[target];
-
-                    victimX = victim.x;
-                    victimY = victim.y;
-                    victimName = victim.username;
+                    victimX = room.bots[target].x;
+                    victimY = room.bots[target].y;
                 }
 
                 const distance = Math.hypot(
@@ -1046,66 +939,39 @@ wss.on("connection", socket => {
                     bot.y - victimY
                 );
 
-                console.log("[BOT KILL] IMPOSTOR:", bot.username);
-                console.log("[BOT KILL] VÍTIMA:", victimName);
-                console.log("[BOT KILL] DISTÂNCIA:", distance);
+                if (distance > KILL_DISTANCE) break;
 
-                if (distance > KILL_DISTANCE) {
-                    console.log("[BOT KILL] Vítima está muito longe");
-                    break;
-                }
-
-                // MARCAR VÍTIMA COMO MORTA
                 room.alive[target] = false;
 
                 if (isBot) {
                     room.botAlive[target] = false;
                 }
 
-                // REGISTRAR CORPO
-                room.bodies[target] = {
-                    uuid: target,
-                    x: victimX,
-                    y: victimY
-                };
-
-                console.log("[BOT KILL] ELIMINAÇÃO CONFIRMADA!");
+                criarCorpo(room, target, victimX, victimY);
 
                 if (isHuman) {
-                    // AVISAR TODOS OS CLIENTES QUE O JOGADOR FOI ELIMINADO
                     sendToRoom(room, {
                         cmd: "player_killed",
                         content: {
                             uuid: target,
-                            killer_id: botId,
-                            body: room.bodies[target]
+                            killer_id: botId
                         }
                     });
-
-                    console.log("[BOT KILL] JOGADOR ELIMINADO:", target);
                 } else {
-                    // REMOVER O BOT ELIMINADO
                     sendToRoom(room, {
                         cmd: "remove_network_bot",
-                        content: {
-                            bot_id: target
-                        }
+                        content: { bot_id: target }
                     });
 
                     delete room.bots[target];
-
-                    console.log("[BOT KILL] BOT REMOVIDO:", target);
                 }
 
                 verificarVitoria(room);
-
-                console.log("================================");
-
                 break;
             }
 
             // =====================================
-            // REMOVER BOT MANUALMENTE
+            // REMOVER BOT
             // =====================================
 
             case "bot_remove": {
@@ -1114,7 +980,6 @@ wss.on("connection", socket => {
                 if (!room || uuid !== room.host) return;
 
                 const botId = String(content.bot_id || "");
-
                 if (!room.bots[botId]) return;
 
                 delete room.bots[botId];
@@ -1133,109 +998,52 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // HUMANO IMPOSTOR - ELIMINAR BOT
+            // HUMANO IMPOSTOR - MATAR BOT
             // =====================================
 
             case "kill_bot": {
                 const room = rooms.get(socket.roomId);
 
-                console.log("================================");
-                console.log("[KILL BOT] PEDIDO RECEBIDO");
-                console.log("JOGADOR:", uuid);
-                console.log("CONTEÚDO:", content);
-
-                if (!room || !room.started || room.finished) {
-                    console.log("[KILL BOT] Sala inválida ou partida encerrada");
-                    break;
-                }
-
-                if (room.meeting.active) {
-                    console.log("[KILL BOT] Reunião ativa");
-                    break;
-                }
+                if (!room || !room.started || room.finished) break;
+                if (room.meeting.active) break;
+                if (room.roles[uuid] !== "impostor") break;
+                if (room.alive[uuid] !== true) break;
+                if (room.ventStates[uuid] != null) break;
 
                 const botId = String(content.bot_id || "");
-
-                if (room.roles[uuid] !== "impostor") {
-                    console.log("[KILL BOT] Jogador não é impostor");
-                    break;
-                }
-
-                if (room.alive[uuid] !== true) {
-                    console.log("[KILL BOT] Impostor está morto");
-                    break;
-                }
-
-                if (room.ventStates[uuid] != null) {
-                    console.log("[KILL BOT] Impostor está no duto");
-                    break;
-                }
-
                 const bot = room.bots[botId];
 
-                if (!bot) {
-                    console.log("[KILL BOT] Bot não encontrado:", botId);
-                    break;
-                }
-
-                if (room.roles[botId] !== "crewmate") {
-                    console.log("[KILL BOT] Bot não é crewmate");
-                    break;
-                }
-
-                if (room.alive[botId] !== true) {
-                    console.log("[KILL BOT] Bot já está morto");
-                    break;
-                }
+                if (!bot || room.roles[botId] !== "crewmate") break;
+                if (room.alive[botId] !== true) break;
 
                 const killer = playerlist.get(uuid);
-
-                if (!killer) {
-                    console.log("[KILL BOT] Jogador não encontrado");
-                    break;
-                }
+                if (!killer) break;
 
                 const distance = Math.hypot(
                     killer.x - bot.x,
                     killer.y - bot.y
                 );
 
-                console.log("[KILL BOT] DISTÂNCIA:", distance);
-
-                if (distance > KILL_DISTANCE) {
-                    console.log("[KILL BOT] Bot está muito longe");
-                    break;
-                }
+                if (distance > KILL_DISTANCE) break;
 
                 room.alive[botId] = false;
                 room.botAlive[botId] = false;
 
-                room.bodies[botId] = {
-                    uuid: botId,
-                    x: bot.x,
-                    y: bot.y
-                };
-
-                console.log("[KILL BOT] ELIMINAÇÃO CONFIRMADA:", botId);
+                criarCorpo(room, botId, bot.x, bot.y);
 
                 sendToRoom(room, {
                     cmd: "remove_network_bot",
-                    content: {
-                        bot_id: botId
-                    }
+                    content: { bot_id: botId }
                 });
 
                 delete room.bots[botId];
 
-                console.log("[KILL BOT] BOT REMOVIDO DO SERVIDOR:", botId);
-
                 verificarVitoria(room);
-
                 break;
             }
 
             // =====================================
-            // HUMANO IMPOSTOR - ELIMINAR HUMANO
+            // HUMANO IMPOSTOR - MATAR HUMANO
             // =====================================
 
             case "kill": {
@@ -1243,7 +1051,6 @@ wss.on("connection", socket => {
 
                 if (!room || !room.started || room.finished) return;
                 if (room.meeting.active) return;
-
                 if (room.roles[uuid] !== "impostor") return;
                 if (room.alive[uuid] !== true) return;
                 if (room.ventStates[uuid] != null) return;
@@ -1265,29 +1072,17 @@ wss.on("connection", socket => {
                     killer.y - victim.y
                 );
 
-                console.log("================================");
-                console.log("HUMANO IMPOSTOR TENTOU ELIMINAR");
-                console.log("IMPOSTOR:", uuid);
-                console.log("VÍTIMA:", target);
-                console.log("DISTÂNCIA:", distance);
-                console.log("================================");
-
                 if (distance > KILL_DISTANCE) return;
 
                 room.alive[target] = false;
 
-                room.bodies[target] = {
-                    uuid: target,
-                    x: victim.x,
-                    y: victim.y
-                };
+                criarCorpo(room, target, victim.x, victim.y);
 
                 sendToRoom(room, {
                     cmd: "player_killed",
                     content: {
                         uuid: target,
-                        killer_id: uuid,
-                        body: room.bodies[target]
+                        killer_id: uuid
                     }
                 });
 
@@ -1304,7 +1099,6 @@ wss.on("connection", socket => {
 
                 if (!room || !room.started || room.finished) return;
                 if (room.meeting.active) return;
-
                 if (room.roles[uuid] !== "impostor") return;
                 if (room.alive[uuid] !== true) return;
                 if (room.ventStates[uuid] != null) return;
@@ -1315,15 +1109,11 @@ wss.on("connection", socket => {
                 if (
                     !Number.isInteger(from) ||
                     !Number.isInteger(to) ||
-                    from < 0 ||
-                    from > 3 ||
-                    to < 0 ||
-                    to > 3
+                    from < 0 || from > 3 ||
+                    to < 0 || to > 3
                 ) return;
 
-                const destinoEsperado = (from + 1) % 4;
-
-                if (to !== destinoEsperado) return;
+                if (to !== (from + 1) % 4) return;
 
                 room.ventStates[uuid] = { from, to };
 
@@ -1350,12 +1140,10 @@ wss.on("connection", socket => {
 
                 if (!room || !room.started || room.finished) return;
                 if (room.meeting.active) return;
-
                 if (room.roles[uuid] !== "impostor") return;
                 if (room.alive[uuid] !== true) return;
 
                 const state = room.ventStates[uuid];
-
                 if (!state) return;
 
                 const vent = Number(content.vent);
@@ -1395,26 +1183,16 @@ wss.on("connection", socket => {
                 if (room.completedTasks.has(taskId)) return;
 
                 room.completedTasks.add(taskId);
-
-                room.taskProgress = Math.min(
-                    room.taskProgress + 10,
-                    100
-                );
-
-                console.log("Jogador completou tarefa:", uuid, taskId);
+                room.taskProgress = Math.min(room.taskProgress + 10, 100);
 
                 sendToRoom(room, {
                     cmd: "task_progress",
-                    content: {
-                        value: room.taskProgress
-                    }
+                    content: { value: room.taskProgress }
                 });
 
                 sendToRoom(room, {
                     cmd: "task_completed",
-                    content: {
-                        task_id: taskId
-                    }
+                    content: { task_id: taskId }
                 });
 
                 if (room.taskProgress >= 100) {
@@ -1437,12 +1215,11 @@ wss.on("connection", socket => {
                 if (room.ventStates[uuid] != null) return;
 
                 const target = String(content.uuid || "");
-
-                if (!target || !room.bodies[target]) return;
-
-                const reporter = playerlist.get(uuid);
                 const body = room.bodies[target];
 
+                if (!target || !body) return;
+
+                const reporter = playerlist.get(uuid);
                 if (!reporter) return;
 
                 const distance = Math.hypot(
@@ -1457,7 +1234,7 @@ wss.on("connection", socket => {
             }
 
             // =====================================
-            // REUNIÃO DE EMERGÊNCIA
+            // BOTÃO DE EMERGÊNCIA
             // =====================================
 
             case "meeting_start": {
@@ -1484,13 +1261,9 @@ wss.on("connection", socket => {
                 if (room.alive[uuid] !== true) return;
 
                 const target = String(content.target || "");
-
                 if (!target) return;
 
-                if (
-                    target !== "skip" &&
-                    room.alive[target] !== true
-                ) return;
+                if (target !== "skip" && room.alive[target] !== true) return;
 
                 if (
                     Object.prototype.hasOwnProperty.call(
@@ -1501,17 +1274,15 @@ wss.on("connection", socket => {
 
                 room.meeting.votes[uuid] = target;
 
-                const vivos = Object.keys(room.players).filter(
+                const vivos = Object.keys(room.alive).filter(
                     id => room.alive[id] === true
                 );
-
-                const totalVotes = Object.keys(room.meeting.votes).length;
 
                 sendToRoom(room, {
                     cmd: "vote_received",
                     content: {
                         uuid,
-                        total_votes: totalVotes,
+                        total_votes: Object.keys(room.meeting.votes).length,
                         total_alive: vivos.length
                     }
                 });
@@ -1526,19 +1297,16 @@ wss.on("connection", socket => {
 
             case "chat": {
                 const room = rooms.get(socket.roomId);
-
                 if (!room) return;
 
-                const msg = String(content.msg || "").slice(0, 300);
+                if (room.started && room.alive[uuid] !== true) return;
 
+                const msg = String(content.msg || "").slice(0, 300);
                 if (!msg.trim()) return;
 
                 sendToRoom(room, {
                     cmd: "new_chat_message",
-                    content: {
-                        uuid,
-                        msg
-                    }
+                    content: { uuid, msg }
                 });
 
                 break;
