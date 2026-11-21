@@ -961,6 +961,11 @@ wss.on("connection", socket => {
             // BOT - ELIMINAR JOGADOR
             // =====================================
 
+            
+            // =====================================
+            // BOT - ELIMINAR HUMANO OU OUTRO BOT
+            // =====================================
+
             case "bot_kill": {
                 const room = rooms.get(socket.roomId);
 
@@ -971,41 +976,74 @@ wss.on("connection", socket => {
                 const botId = String(content.bot_id || "");
                 const target = String(content.target || "");
 
+                // Verificar o impostor
                 if (!room.bots[botId]) return;
-
                 if (room.roles[botId] !== "impostor") return;
                 if (room.alive[botId] !== true) return;
 
-                if (!room.players[target]) return;
+                if (!target || target === botId) return;
+
+                // Verificar se o alvo é humano ou bot
+                const isHuman = !!room.players[target];
+                const isBot = !!room.bots[target];
+
+                if (!isHuman && !isBot) return;
+
+                // Não pode eliminar outro impostor
                 if (room.roles[target] !== "crewmate") return;
                 if (room.alive[target] !== true) return;
 
-                const bot = room.bots[botId];
-                const victim = playerlist.get(target);
+                // Obter posição do alvo
+                let victimX;
+                let victimY;
 
-                if (!victim) return;
+                if (isHuman) {
+                    const victim = playerlist.get(target);
+                    if (!victim) return;
+
+                    victimX = victim.x;
+                    victimY = victim.y;
+                } else {
+                    victimX = room.bots[target].x;
+                    victimY = room.bots[target].y;
+                }
+
+                // Posição do bot impostor
+                const bot = room.bots[botId];
 
                 const distance = Math.hypot(
-                    bot.x - victim.x,
-                    bot.y - victim.y
+                    bot.x - victimX,
+                    bot.y - victimY
                 );
 
                 if (distance > KILL_DISTANCE) return;
 
+                // Marcar vítima como eliminada
                 room.alive[target] = false;
 
+                if (isBot) {
+                    room.botAlive[target] = false;
+                }
+
+                // Criar corpo
                 room.bodies[target] = {
                     uuid: target,
-                    x: victim.x,
-                    y: victim.y
+                    x: victimX,
+                    y: victimY
                 };
 
-                console.log(
-                    "Bot eliminou jogador:",
-                    botId,
-                    target
+                console.log("================================");
+                console.log("BOT IMPOSTOR ELIMINOU!");
+                console.log("IMPOSTOR:", bot.username);
+                console.log("VÍTIMA:", isHuman
+                    ? target
+                    : room.bots[target].username
                 );
+                console.log("TIPO:", isHuman ? "HUMANO" : "BOT");
+                console.log("DISTÂNCIA:", distance);
+                console.log("================================");
 
+                // Avisar todos os jogadores
                 sendToRoom(room, {
                     cmd: "player_killed",
                     content: {
