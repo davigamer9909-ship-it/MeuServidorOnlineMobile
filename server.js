@@ -723,6 +723,51 @@ wss.on("connection", socket => {
 				: {};
 
 		switch (data.cmd) {
+			// =====================================
+// BOT REPORTAR CORPO
+// =====================================
+
+case "bot_report_body": {
+	const room = rooms.get(socket.roomId);
+
+	if (!room || !room.started || room.finished) return;
+	if (room.meeting.active) return;
+
+	// Somente o controlador dos bots pode solicitar.
+	if (uuid !== room.botController) return;
+
+	const botId = String(content.bot_id || "");
+	const bodyUUID = String(content.body_uuid || "");
+
+	const bot = room.bots[botId];
+	const body = room.bodies[bodyUUID];
+
+	if (!bot || !body) return;
+	if (room.alive[botId] !== true) return;
+
+	const distancia = Math.hypot(
+		bot.x - body.x,
+		bot.y - body.y
+	);
+
+	if (distancia > REPORT_DISTANCE) return;
+
+	console.log(
+		"BOT REPORTOU CORPO:",
+		obterNome(room, botId),
+		"CORPO:",
+		bodyUUID
+	);
+
+	iniciarReuniao(
+		room,
+		botId,
+		"body_report",
+		bodyUUID
+	);
+
+	break;
+}	
 
 			// =====================================
 			// SAIR DA SALA
