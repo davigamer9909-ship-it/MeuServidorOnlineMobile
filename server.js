@@ -19,7 +19,16 @@ const MEETING_DURATION = 60;
 
 const BLACKOUT_DURATION = 30;
 const DOOR_DURATION = 12;
-
+const VALID_DOORS = new Set([
+	"DoorReator",
+	"DoorCam",
+	"DoorMotorSuperior",
+	"DoorMed",
+	"DoorMotorInferior",
+	"DoorArmazenamento",
+	"DoorAdmin",
+	"DoorCaf"
+]);
 // =====================================
 // CÓDIGO DA SALA
 // =====================================
@@ -261,6 +270,9 @@ function iniciarApagao(room, botId) {
 }
 
 function alterarEstadoPorta(room, doorId, closed, duration = DOOR_DURATION) {
+	if (!room || !VALID_DOORS.has(doorId)) return;
+
+	// O restante da sua função continua igual.
 	if (!room || !doorId) return;
 
 	if (room.doorTimers[doorId]) {
@@ -1809,6 +1821,80 @@ wss.on("connection", socket => {
 				if (room.taskProgress >= 100) {
 					finalizarPartida(room, "crewmates");
 				}
+
+				break;
+			}
+			
+			// =====================================
+			// JOGADOR IMPOSTOR - INICIAR APAGÃO
+			// =====================================
+
+			case "sabotage_blackout": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) break;
+				if (room.meeting.active) break;
+				if (room.roles[uuid] !== "impostor") break;
+				if (room.alive[uuid] !== true) break;
+				if (room.ventStates[uuid] != null) break;
+				if (room.blackout) break;
+
+				iniciarApagao(room, uuid);
+				break;
+			}
+
+			// =====================================
+			// JOGADOR IMPOSTOR - FECHAR PORTA
+			// =====================================
+
+			case "sabotage_door": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) break;
+				if (room.meeting.active) break;
+				if (room.roles[uuid] !== "impostor") break;
+				if (room.alive[uuid] !== true) break;
+				if (room.ventStates[uuid] != null) break;
+
+				const doorId = String(content.door_id || "");
+
+				if (!VALID_DOORS.has(doorId)) break;
+				if (room.doors[doorId] === true) break;
+
+				alterarEstadoPorta(
+					room,
+					doorId,
+					true,
+					DOOR_DURATION
+				);
+
+				console.log(
+					"[SABOTAGEM JOGADOR]",
+					obterNome(room, uuid),
+					"fechou:",
+					doorId
+				);
+
+				break;
+			}
+
+			// =====================================
+			// JOGADOR TRIPULANTE - REPARAR APAGÃO
+			// =====================================
+
+			case "repair_blackout": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) break;
+				if (room.meeting.active) break;
+				if (room.roles[uuid] !== "crewmate") break;
+				if (room.alive[uuid] !== true) break;
+				if (room.ventStates[uuid] != null) break;
+				if (!room.blackout) break;
+
+				// O cliente envia o pedido quando o jogador
+				// chega perto do painel elétrico.
+				repararApagao(room, uuid);
 
 				break;
 			}
