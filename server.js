@@ -17,6 +17,9 @@ const REPORT_DISTANCE = 70;
 const KILL_DISTANCE = 70;
 const MEETING_DURATION = 60;
 
+const BLACKOUT_DURATION = 30;
+const DOOR_DURATION = 12;
+
 // =====================================
 // CÓDIGO DA SALA
 // =====================================
@@ -135,7 +138,7 @@ function sendToPlayer(room, id, message) {
 }
 
 // =====================================
-// LISTA DE PARTICIPANTES
+// PARTICIPANTES
 // =====================================
 
 function obterParticipantes(room) {
@@ -164,10 +167,6 @@ function obterParticipantes(room) {
 	return participantes;
 }
 
-// =====================================
-// NOME DO PARTICIPANTE
-// =====================================
-
 function obterNome(room, id) {
 	if (room.bots[id]) {
 		return room.bots[id].username || "Bot";
@@ -175,6 +174,13 @@ function obterNome(room, id) {
 
 	const player = playerlist.get(id);
 	return player ? player.username : "Jogador";
+}
+
+function obterParticipantesVivos(room) {
+	return Object.keys(room.alive).filter(id =>
+		room.alive[id] === true &&
+		(!!room.players[id] || !!room.bots[id])
+	);
 }
 
 // =====================================
@@ -202,6 +208,150 @@ function criarCorpo(room, target, x, y, killerId = null) {
 	console.log("ELIMINADO POR:", killerId || "Desconhecido");
 
 	return body;
+}
+
+// =====================================
+// SABOTAGENS
+// =====================================
+
+function repararApagao(room, repairedBy = null) {
+	if (!room || !room.blackout) return;
+
+	room.blackout = false;
+
+	if (room.blackoutTimer) {
+		clearTimeout(room.blackoutTimer);
+		room.blackoutTimer = null;
+	}
+
+	sendToRoom(room, {
+		cmd: "blackout_repaired",
+		content: {
+			repaired_by: repairedBy
+		}
+	});
+
+	console.log(
+		"APAGÃO REPARADO:",
+		repairedBy ? obterNome(room, repairedBy) : "Tempo esgotado"
+	);
+}
+
+function iniciarApagao(room, botId) {
+	if (!room || room.blackout) return false;
+
+	room.blackout = true;
+
+	sendToRoom(room, {
+		cmd: "blackout_started",
+		content: {
+			duration: BLACKOUT_DURATION,
+			saboteur_id: botId
+		}
+	});
+
+	console.log("APAGÃO INICIADO POR:", obterNome(room, botId));
+
+	room.blackoutTimer = setTimeout(() => {
+		if (!room.blackout) return;
+		repararApagao(room, null);
+	}, BLACKOUT_DURATION * 1000);
+
+	return true;
+}
+
+function alterarEstadoPorta(room, doorId, closed, duration = DOOR_DURATION) {
+	if (!room || !doorId) return;
+
+	if (room.doorTimers[doorId]) {
+		clearTimeout(room.doorTimers[doorId]);
+		delete room.doorTimers[doorId];
+	}
+
+	room.doors[doorId] = closed;
+
+	sendToRoom(room, {
+		cmd: "door_state",
+		content: {
+			door_id: doorId,
+			closed,
+			duration: closed ? duration : 0
+		}
+	});
+
+	console.log(
+		"PORTA:",
+		doorId,
+		closed ? "FECHADA" : "ABERTA"
+	);
+
+	if (!closed) return;
+
+	const timer = setTimeout(() => {
+		if (room.doorTimers[doorId] !== timer) return;
+
+		delete room.doorTimers[doorId];
+
+		if (room.doors[doorId] !== true) return;
+
+		room.doors[doorId] = false;
+
+		sendToRoom(room, {
+			cmd: "door_state",
+			content: {
+				door_id: doorId,
+				closed: false,
+				duration: 0
+			}
+		});
+
+		console.log("PORTA ABERTA AUTOMATICAMENTE:", doorId);
+	}, duration * 1000);
+
+	room.doorTimers[doorId] = timer;
+}
+
+function limparSabotagens(room) {
+	if (!room) return;
+
+	if (room.blackoutTimer) {
+		clearTimeout(room.blackoutTimer);
+		room.blackoutTimer = null;
+	}
+
+	if (room.blackout) {
+		room.blackout = false;
+
+		sendToRoom(room, {
+			cmd: "blackout_repaired",
+			content: {
+				repaired_by: null
+			}
+		});
+	}
+
+	for (const doorId of Object.keys(room.doorTimers)) {
+		clearTimeout(room.doorTimers[doorId]);
+	}
+
+	room.doorTimers = {};
+
+	for (const doorId of Object.keys(room.doors)) {
+		if (room.doors[doorId] === true) {
+			room.doors[doorId] = false;
+
+			sendToRoom(room, {
+				cmd: "door_state",
+				content: {
+					door_id: doorId,
+					closed: false,
+					duration: 0
+				}
+			});
+		}
+	}
+
+	console.log("SABOTAGENS LIMPA(S).");
 }
 
 // =====================================
@@ -283,29 +433,15 @@ function resetMeeting(room) {
 }
 
 // =====================================
-// PARTICIPANTES VIVOS
-// =====================================
-
-function obterParticipantesVivos(room) {
-	return Object.keys(room.alive).filter(id =>
-		room.alive[id] === true &&
-		(!!room.players[id] || !!room.bots[id])
-	);
-}
-
-// =====================================
-// VOTO AUTOMÁTICO DOS BOTS
+// VOTAÇÃO AUTOMÁTICA DOS BOTS
 // =====================================
 
 function votarBot(room, botId, meetingAtual) {
-	// Impede votos de reuniões antigas.
 	if (!room || room.meeting !== meetingAtual) return;
 	if (!meetingAtual.active || room.finished) return;
-
 	if (!room.bots[botId]) return;
 	if (room.alive[botId] !== true) return;
 
-	// Impede o mesmo bot de votar duas vezes.
 	if (
 		Object.prototype.hasOwnProperty.call(
 			meetingAtual.votes,
@@ -319,7 +455,6 @@ function votarBot(room, botId, meetingAtual) {
 
 	let target = "skip";
 
-	// 15% de chance de pular.
 	if (participantes.length > 0 && Math.random() >= 0.15) {
 		target = participantes[
 			Math.floor(Math.random() * participantes.length)
@@ -354,7 +489,6 @@ function agendarVotosDosBots(room, meetingAtual) {
 	for (const botId of Object.keys(room.bots)) {
 		if (room.alive[botId] !== true) continue;
 
-		// Entre 1,5 e 10 segundos.
 		const delay = 1500 + Math.random() * 8500;
 
 		const timer = setTimeout(() => {
@@ -363,63 +497,6 @@ function agendarVotosDosBots(room, meetingAtual) {
 
 		meetingAtual.botTimers.push(timer);
 	}
-}
-
-// =====================================
-// INICIAR REUNIÃO
-// =====================================
-
-function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
-	if (!room || !room.started || room.finished) return false;
-	if (room.meeting.active) return false;
-	if (room.alive[reporter] !== true) return false;
-
-	if (bodyUUID && !room.bodies[bodyUUID]) {
-		return false;
-	}
-
-	if (bodyUUID) {
-		delete room.bodies[bodyUUID];
-	}
-
-	room.meeting = {
-		active: true,
-		reporter,
-		reason,
-		votes: {},
-		startedAt: Date.now(),
-		timer: null,
-		botTimers: []
-	};
-
-	const meetingAtual = room.meeting;
-
-	console.log("REUNIÃO INICIADA:", reason, reporter);
-
-	sendToRoom(room, {
-		cmd: "meeting_started",
-		content: {
-			reason,
-			reporter,
-			reporter_name: obterNome(room, reporter),
-			body_uuid: bodyUUID,
-			duration: MEETING_DURATION,
-			players: obterParticipantes(room)
-		}
-	});
-
-	// Agenda os votos dos bots.
-	agendarVotosDosBots(room, meetingAtual);
-
-	// Tempo máximo da reunião.
-	meetingAtual.timer = setTimeout(() => {
-		if (room.meeting === meetingAtual && meetingAtual.active) {
-			console.log("TEMPO DA REUNIÃO ESGOTADO!");
-			finalizarReuniao(room);
-		}
-	}, MEETING_DURATION * 1000);
-
-	return true;
 }
 
 // =====================================
@@ -439,6 +516,8 @@ function finalizarPartida(room, winner) {
 		limparTimersDosBots(room.meeting);
 		room.meeting.active = false;
 	}
+
+	limparSabotagens(room);
 
 	sendToRoom(room, {
 		cmd: "game_over",
@@ -478,6 +557,63 @@ function verificarVitoria(room) {
 }
 
 // =====================================
+// INICIAR REUNIÃO
+// =====================================
+
+function iniciarReuniao(room, reporter, reason, bodyUUID = null) {
+	if (!room || !room.started || room.finished) return false;
+	if (room.meeting.active) return false;
+	if (room.alive[reporter] !== true) return false;
+
+	if (bodyUUID && !room.bodies[bodyUUID]) {
+		return false;
+	}
+
+	if (bodyUUID) {
+		delete room.bodies[bodyUUID];
+	}
+
+	limparSabotagens(room);
+
+	room.meeting = {
+		active: true,
+		reporter,
+		reason,
+		votes: {},
+		startedAt: Date.now(),
+		timer: null,
+		botTimers: []
+	};
+
+	const meetingAtual = room.meeting;
+
+	console.log("REUNIÃO INICIADA:", reason, reporter);
+
+	sendToRoom(room, {
+		cmd: "meeting_started",
+		content: {
+			reason,
+			reporter,
+			reporter_name: obterNome(room, reporter),
+			body_uuid: bodyUUID,
+			duration: MEETING_DURATION,
+			players: obterParticipantes(room)
+		}
+	});
+
+	agendarVotosDosBots(room, meetingAtual);
+
+	meetingAtual.timer = setTimeout(() => {
+		if (room.meeting === meetingAtual && meetingAtual.active) {
+			console.log("TEMPO DA REUNIÃO ESGOTADO!");
+			finalizarReuniao(room);
+		}
+	}, MEETING_DURATION * 1000);
+
+	return true;
+}
+
+// =====================================
 // FINALIZAR REUNIÃO
 // =====================================
 
@@ -512,8 +648,6 @@ function finalizarReuniao(room) {
 	let ejectedRole = "";
 	let tie = false;
 
-	// Elimina somente se houver um vencedor único
-	// que não seja Skip.
 	if (winners.length === 1 && winners[0] !== "skip") {
 		const target = winners[0];
 
@@ -552,7 +686,6 @@ function finalizarReuniao(room) {
 	}
 
 	const votesCast = Object.keys(votes).length;
-
 	const totalVoters = obterParticipantesVivos(room).length +
 		(ejected !== null ? 1 : 0);
 
@@ -583,7 +716,6 @@ function finalizarReuniao(room) {
 	console.log("EMPATE:", tie);
 	console.log("================================");
 
-	// Remove o bot eliminado dos clientes.
 	if (ejected && ejectedBot) {
 		sendToRoom(room, {
 			cmd: "remove_network_bot",
@@ -600,7 +732,7 @@ function finalizarReuniao(room) {
 }
 
 // =====================================
-// VERIFICAR SE TODOS VOTARAM
+// VERIFICAR VOTOS
 // =====================================
 
 function verificarVotos(room) {
@@ -671,6 +803,8 @@ function removerJogadorDaSala(socket, uuid) {
 		atualizarControladorSeNecessario(room, uuid);
 
 		if (Object.keys(room.players).length === 0) {
+			limparSabotagens(room);
+
 			if (room.meeting && room.meeting.timer) {
 				clearTimeout(room.meeting.timer);
 			}
@@ -725,56 +859,132 @@ wss.on("connection", socket => {
 				: {};
 
 		switch (data.cmd) {
+
 			// =====================================
-// BOT REPORTAR CORPO
-// =====================================
+			// BOT REPORTAR CORPO
+			// =====================================
 
-case "bot_report_body": {
-	const room = rooms.get(socket.roomId);
+			case "bot_report_body": {
+				const room = rooms.get(socket.roomId);
 
-	if (!room || !room.started || room.finished) return;
-	if (room.meeting.active) return;
+				if (!room || !room.started || room.finished) return;
+				if (room.meeting.active) return;
+				if (uuid !== room.botController) return;
 
-	// Somente o controlador dos bots pode solicitar.
-	if (uuid !== room.botController) return;
+				const botId = String(content.bot_id || "");
+				const bodyUUID = String(content.body_uuid || "");
 
-	const botId = String(content.bot_id || "");
-	const bodyUUID = String(content.body_uuid || "");
+				const bot = room.bots[botId];
+				const body = room.bodies[bodyUUID];
 
-	const bot = room.bots[botId];
-	const body = room.bodies[bodyUUID];
+				if (!bot || !body) return;
+				if (room.alive[botId] !== true) return;
 
-	if (!bot || !body) return;
-	if (room.alive[botId] !== true) return;
+				if (body.killer_id === botId) return;
 
-	// O bot não pode reportar automaticamente
-	// o corpo que ele mesmo criou.
-	// O self-report é decidido no bot_kill.
-	if (body.killer_id === botId) return;
+				const distancia = Math.hypot(
+					bot.x - body.x,
+					bot.y - body.y
+				);
 
-	const distancia = Math.hypot(
-	bot.x - body.x,
-	bot.y - body.y
-	);
+				if (distancia > REPORT_DISTANCE) return;
 
-	if (distancia > REPORT_DISTANCE) return;
+				console.log(
+					"BOT REPORTOU CORPO:",
+					obterNome(room, botId),
+					"CORPO:",
+					bodyUUID
+				);
 
-	console.log(
-		"BOT REPORTOU CORPO:",
-		obterNome(room, botId),
-		"CORPO:",
-		bodyUUID
-	);
+				iniciarReuniao(
+					room,
+					botId,
+					"body_report",
+					bodyUUID
+				);
 
-	iniciarReuniao(
-		room,
-		botId,
-		"body_report",
-		bodyUUID
-	);
+				break;
+			}
 
-	break;
-}	
+			// =====================================
+			// BOT IMPOSTOR - INICIAR APAGÃO
+			// =====================================
+
+			case "bot_sabotage_blackout": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) return;
+				if (uuid !== room.botController) return;
+				if (room.meeting.active) return;
+
+				const botId = String(content.bot_id || "");
+				const bot = room.bots[botId];
+
+				if (!bot) return;
+				if (room.alive[botId] !== true) return;
+				if (room.roles[botId] !== "impostor") return;
+				if (room.blackout) return;
+
+				iniciarApagao(room, botId);
+				break;
+			}
+
+			// =====================================
+			// BOT - REPARAR APAGÃO
+			// =====================================
+
+			case "bot_repair_blackout": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) return;
+				if (uuid !== room.botController) return;
+				if (room.meeting.active) return;
+
+				const botId = String(content.bot_id || "");
+				const bot = room.bots[botId];
+
+				if (!bot) return;
+				if (room.alive[botId] !== true) return;
+				if (!room.blackout) return;
+
+				// O cliente deve enviar este comando somente
+				// quando o bot estiver perto do painel elétrico.
+				repararApagao(room, botId);
+				break;
+			}
+
+			// =====================================
+			// BOT IMPOSTOR - FECHAR PORTA
+			// =====================================
+
+			case "bot_sabotage_door": {
+				const room = rooms.get(socket.roomId);
+
+				if (!room || !room.started || room.finished) return;
+				if (uuid !== room.botController) return;
+				if (room.meeting.active) return;
+
+				const botId = String(content.bot_id || "");
+				const doorId = String(content.door_id || "");
+
+				const bot = room.bots[botId];
+
+				if (!bot) return;
+				if (room.alive[botId] !== true) return;
+				if (room.roles[botId] !== "impostor") return;
+
+				if (!doorId || doorId.length > 100) return;
+				if (room.doors[doorId] === true) return;
+
+				alterarEstadoPorta(
+					room,
+					doorId,
+					true,
+					DOOR_DURATION
+				);
+
+				break;
+			}
 
 			// =====================================
 			// SAIR DA SALA
@@ -827,6 +1037,12 @@ case "bot_report_body": {
 
 					ventStates: {},
 					bodies: {},
+
+					blackout: false,
+					blackoutTimer: null,
+
+					doors: {},
+					doorTimers: {},
 
 					meeting: {
 						active: false,
@@ -1121,6 +1337,7 @@ case "bot_report_body": {
 				room.completedTasks = new Set();
 				room.finished = false;
 
+				limparSabotagens(room);
 				resetMeeting(room);
 
 				for (const id of participants) {
@@ -1446,44 +1663,42 @@ case "bot_report_body": {
 
 				room.alive[target] = false;
 
-				const body = criarCorpo(
+				criarCorpo(
 					room,
 					target,
 					victim.x,
 					victim.y,
 					uuid
 				);
+
 				sendToRoom(room, {
 					cmd: "player_killed",
 					content: {
 						uuid: target,
-						killer_id: uuid,
-						body
+						killer_id: uuid
 					}
 				});
 
 				verificarVitoria(room);
 
-				// Se a partida acabou, não existe self-report.
 				if (room.finished) break;
 
-				// 20% de chance de self-report.
 				if (room.bodies[target] && Math.random() < 0.20) {
 					console.log(
-					"[SELF REPORT] ",
-					obterNome(room, botId),
-					" reportou o próprio assassinato!"
-				);
+						"[SELF REPORT]",
+						obterNome(room, uuid),
+						"reportou o próprio assassinato!"
+					);
 
-				iniciarReuniao(
-					room,
-					botId,
-					"body_report",
-					target
-				);
-}
+					iniciarReuniao(
+						room,
+						uuid,
+						"body_report",
+						target
+					);
+				}
 
-break;
+				break;
 			}
 
 			// =====================================
@@ -1658,13 +1873,11 @@ break;
 
 				if (!target) return;
 
-				// Só aceita Skip ou participante vivo.
 				if (target !== "skip") {
 					if (room.alive[target] !== true) return;
 					if (!room.players[target] && !room.bots[target]) return;
 				}
 
-				// Não permite votar duas vezes.
 				if (
 					Object.prototype.hasOwnProperty.call(
 						room.meeting.votes,
